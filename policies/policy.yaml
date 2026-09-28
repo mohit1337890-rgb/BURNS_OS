@@ -1,0 +1,181 @@
+# ==============================================================================
+# Burns OS Policy Engine - declarative action -> tier rules.
+#
+# Tiers:
+#   0 = read-only. Executes immediately, no approval.
+#   1 = draft/sandbox (never leaves the sandbox, never touches money/external
+#       systems). Executes immediately, no approval.
+#   2 = external action (sends/publishes/deploys something real, but is
+#       reversible or low-stakes). Requires one Telegram approval.
+#   3 = money, irreversible, or high-risk. Requires board review (the
+#       propose->challenge->revise->verdict loop) + owner approval + a
+#       mandatory cooling period before execution.
+#
+# An action name NOT listed below is classified at the HIGHEST tier (3) by
+# design (see core/policy_engine.py::classify) - an unrecognized action must
+# never default to something permissive.
+# ==============================================================================
+
+hard_block:
+  # These are never executable by any agent, at any tier, under any approval.
+  # A request matching one of these refuses immediately and alerts the owner.
+  - reveal_secrets
+  - modify_policies
+  - modify_permissions
+  - disable_logging
+  - act_outside_mission_scope
+  - delete_ledger
+  - impersonate_owner
+
+actions:
+  # --- Tier 0: read-only -------------------------------------------------
+  read_file:
+    tier: 0
+  web_search:
+    tier: 0
+  web_fetch:
+    tier: 0
+  sql_read:
+    tier: 0
+  repo_read:
+    tier: 0
+  screenshot:
+    tier: 0
+
+  # --- Tier 1: draft / sandbox --------------------------------------------
+  repo_write:
+    tier: 1
+  sandbox_terminal:
+    tier: 1
+  draft_email:
+    tier: 1
+  draft_post:
+    tier: 1
+  draft_invoice:
+    tier: 1
+  backtest_run:
+    tier: 1
+    notes: "Simulated trades only - never touches a real or demo MT5 account."
+
+  # --- Tier 2: external action ---------------------------------------------
+  send_message:
+    tier: 2
+    allowed_domains: ["api.telegram.org"]
+  send_email:
+    tier: 2
+  publish_post:
+    tier: 2
+    allowed_domains: []  # filled in per-platform when Marketing tools are wired
+  git_push:
+    tier: 2
+    allowed_domains: ["github.com"]
+    notes: "repo_path must resolve inside one of git_push_allowed_roots below - see gateway/plugins/git_push.py."
+  deploy_app:
+    tier: 2
+    notes: "Coolify deploy of a non-production/staging target. Production deploys are Tier 3."
+  approve_mission_spec:
+    tier: 2
+    notes: >
+      Not routed through gateway.core_execute (a mission spec approval isn't
+      an external tool call) - core/missions.py::request_spec_approval calls
+      core.approvals.create_approval directly with tier=2 hardcoded. Listed
+      here for audit-trail/documentation consistency, and because it's
+      still hard-block-checkable if ever added to that list.
+
+  # --- Tier 3: money / irreversible / high-risk ----------------------------
+  place_trade:
+    tier: 3
+    notes: >
+      Every live order is Tier 3, no exceptions. Demo account is the default
+      execution target - see MT5_SERVER in .env. Risk limits
+      (MAX_RISK_PER_TRADE_PCT, MAX_DAILY_LOSS_PCT) are enforced in code by
+      gateway/plugins/place_trade.py, not only here - a request that would
+      breach either limit is refused before it ever reaches the broker.
+  create_invoice:
+    tier: 3
+  send_payment:
+    tier: 3
+  http_request_external:
+    tier: 3
+    notes: "Arbitrary outbound HTTP to a domain with no specific action-level rule above defaults to the highest tier."
+  block_ip:
+    tier: 3
+  delete_data:
+    tier: 3
+  deploy_app_production:
+    tier: 3
+
+# --- Trading Desk hard limits (also enforced in code - see §4.2 note above) --
+trading:
+  max_risk_per_trade_pct: ${MAX_RISK_PER_TRADE_PCT}
+  max_daily_loss_pct: ${MAX_DAILY_LOSS_PCT}
+  default_account: demo
+
+# --- Security Operations: scans are only ever permitted against targets ------
+# explicitly listed in authorised_scopes.yaml - an unlisted target is refused
+# even if the action itself would otherwise be Tier 0/1 (e.g. a read-only
+# port scan of a system the owner doesn't have written authorization for).
+security:
+  # Relative to THIS file's own directory (policies/), not the repo root -
+  # core/policy_engine.py::load_policy resolves it as
+  # `path.parent / scope_file`. A prior version of this value
+  # ("policies/authorised_scopes.yaml") double-counted the "policies/"
+  # segment and silently pointed at a nonexistent
+  # policies/policies/authorised_scopes.yaml - caught only by accident in
+  # a debug traceback, not by any dedicated test (fixed - see
+  # test_load_policy_scope_file_points_to_a_real_existing_file).
+  scope_file: authorised_scopes.yaml
+
+# --- Budgets (also enforced in code by core/budget_guard.py) -----------------
+budgets:
+  monthly_usd: ${MONTHLY_AI_BUDGET_USD}
+  default_mission_usd: ${DEFAULT_MISSION_BUDGET_USD}
+  warn_at_pct: 80
+  stop_at_pct: 100
+
+# --- Approvals -----------------------------------------------------------------
+approvals:
+  expire_after_hours: 24
+  # Confirmed the scheduler's real post-cooling auto-execution via a
+  # temporary 1-minute value (2026-09-29, approval 3bdfe0dd-...) - back to
+  # the real 10-minute cooling period.
+  tier3_cooling_period_minutes: 10
+  # Actions approved this many times in a row with zero edits are reported to
+  # the owner as auto-approve CANDIDATES - the policy is never changed
+  # automatically, only suggested (see core/policy_engine.py::suggest_auto_approve).
+  suggest_auto_approve_after_streak: 10
+
+# Per-plugin enable flag + the env vars each REQUIRES when enabled (closes
+# KNOWN_LIMITS gap #9's plugin half). Core config (core/app_config.py) fails
+# at Gateway startup if ITS OWN required vars are missing - these, by
+# contrast, are only required for a plugin that's actually enabled; a
+# disabled plugin (or one missing its own required vars despite being
+# enabled) refuses to execute rather than crashing the whole Gateway - see
+# gateway/registry_bootstrap.py.
+plugins:
+  send_message:
+    enabled: true
+    required_env: [TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_CHAT_ID]
+  send_email:
+    enabled: true
+    required_env: [SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD]
+  git_push:
+    enabled: true
+    required_env: []
+  deploy_app:
+    enabled: false
+    required_env: [COOLIFY_API_TOKEN, COOLIFY_BASE_URL]
+  place_trade:
+    enabled: false
+    required_env: [MT5_LOGIN, MT5_PASSWORD, MT5_SERVER]
+
+# Real directory roots git_push is allowed to push from - a repo_path must
+# RESOLVE (symlinks/..-traversal followed) to somewhere inside one of
+# these, not just string-startswith one of these (a naive prefix check is
+# bypassable with "../"). Empty by default - mission sandboxes get added
+# here explicitly once Mission Manager actually creates them (see
+# docs/KNOWN_LIMITS.md: nothing yet drives a mission through RUNNING for
+# real). Closes KNOWN_LIMITS gap #8.
+git_push_allowed_roots: []
+
+default_tier_for_unknown_action: 3

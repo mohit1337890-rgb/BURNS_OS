@@ -1,0 +1,37 @@
+# LiteLLM proxy config (BUILD PROMPT section 3: "Routes: premium
+# (coding/planning), cheap (summaries/classification), local via Ollama
+# (sensitive data)"). WRITTEN, NOT YET RUN - see docs/KNOWN_LIMITS.md.
+# Model names/pricing drift over time - re-verify against
+# https://docs.litellm.ai/docs/providers before the first real run.
+
+model_list:
+  - model_name: premium
+    litellm_params:
+      model: anthropic/claude-opus-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: cheap
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: local
+    litellm_params:
+      model: ollama/llama3.1
+      api_base: http://host.docker.internal:11434
+      # Local/Ollama is for SENSITIVE DATA specifically (BUILD PROMPT
+      # section 3) - never routes to a cloud provider, by design, not by
+      # accident of config.
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  # Per-key/per-model budget enforcement (BUILD PROMPT section 4.8's Budget
+  # Guard is a SEPARATE, Ledger-based check in core/budget_guard.py - this
+  # is LiteLLM's own, independent limit as a second line of defense).
+  max_budget: 100
+  budget_duration: 30d

@@ -1,0 +1,230 @@
+# ==============================================================================
+# Burns OS - docker-compose.yml
+#
+# WRITTEN, NOT YET RUN. This dev machine does not have Docker or WSL2
+# installed (verified 2026-09-28 - see docs/KNOWN_LIMITS.md). Every image
+# tag below is pinned deliberately (never "latest") so the first real
+# `docker compose up` is reproducible rather than pulling whatever happens
+# to be current that day. Versions were chosen for compatibility as of this
+# writing - re-verify against each project's own release notes before the
+# first real run, per BUILD PROMPT section 9 ("read the official docs...
+# where docs contradict this prompt, follow the docs").
+# ==============================================================================
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-burns_os}
+      # This becomes the Postgres SUPERUSER via the official image's own
+      # bootstrap (unavoidable - that's just how POSTGRES_USER works) -
+      # "burns_admin" now names that honestly. Migrations run as this role;
+      # the app itself (gateway/approvals_bot/scheduler) never does - see
+      # BURNS_APP_DB_USER below and KNOWN_LIMITS gap #10.
+      POSTGRES_USER: ${POSTGRES_USER:-burns_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-burns_admin} -d ${POSTGRES_DB:-burns_os}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  langfuse-db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:?LANGFUSE_DB_PASSWORD must be set in .env}
+    volumes:
+      - langfuse_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  langfuse:
+    image: langfuse/langfuse:2
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD}@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?LANGFUSE_NEXTAUTH_SECRET must be set in .env}
+      SALT: ${LANGFUSE_SALT:?LANGFUSE_SALT must be set in .env}
+      NEXTAUTH_URL: http://localhost:3001
+      # Docker auto-sets HOSTNAME to the container's own short id; the
+      # langfuse/next.js standalone server reads it as its bind address, so
+      # without this override it listens on <container-ip>:3000 only -
+      # unreachable via localhost/127.0.0.1 (both the healthcheck below and,
+      # via loopback, this container's own other processes).
+      HOSTNAME: "0.0.0.0"
+    ports:
+      - "127.0.0.1:3001:3000"
+    healthcheck:
+      # "localhost" resolves IPv6 (::1) first in this image and nothing
+      # listens there (HOSTNAME=0.0.0.0 above binds IPv4 only) - wget
+      # doesn't fall back to IPv4 the way e.g. Python's urllib does, so it
+      # gets "Connection refused" forever. Explicit 127.0.0.1 sidesteps it.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/public/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-v1.55.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env}
+      # CRITICAL - a SEPARATE database (litellm_db), never ${POSTGRES_DB}
+      # (burns_os). Found live (2026-09-28): litellm's Prisma schema-sync
+      # ("db push") treats the entire connected database's public schema as
+      # its own and silently DROPS any table it doesn't recognize - it
+      # dropped ledger (26 rows), approvals (7 rows) and alembic_version
+      # outright when it was pointed at burns_os. Postgres databases (not
+      # just schemas) are fully isolated from each other on the same
+      # server/role - a different DATABASE NAME here, same postgres
+      # container, is sufficient; no separate postgres service needed (see
+      # KNOWN_LIMITS for the incident writeup). litellm_db is created once,
+      # manually, by an admin (`CREATE DATABASE litellm_db` as burns_admin)
+      # - not by this compose file, same reasoning as burns_app not being
+      # auto-created by the postgres image's own bootstrap.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-burns_admin}:${POSTGRES_PASSWORD}@postgres:5432/litellm_db
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    volumes:
+      - ./configs/litellm_config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports:
+      - "127.0.0.1:4000:4000"
+    healthcheck:
+      # No wget/curl in this image (verified 2026-09-28) - python3 (already
+      # present, it's how litellm itself runs) via urllib instead.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-burns_os}
+      # burns_app (restricted role, migration 0003) - deliberately NOT
+      # POSTGRES_USER/PASSWORD (the admin/superuser). Migrations are run
+      # via `docker compose exec -e POSTGRES_USER=... -e POSTGRES_PASSWORD=...`
+      # (Makefile's `up` target) so the admin password is never baked into
+      # this long-running container's own environment. KNOWN_LIMITS gap #10.
+      BURNS_APP_DB_USER: ${BURNS_APP_DB_USER:-burns_app}
+      BURNS_APP_DB_PASSWORD: ${BURNS_APP_DB_PASSWORD:?BURNS_APP_DB_PASSWORD must be set in .env}
+      LEDGER_ANCHOR_PATH: /data/ledger_anchor.jsonl
+      TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:?TELEGRAM_OWNER_CHAT_ID must be set in .env}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN:?GATEWAY_INTERNAL_TOKEN must be set in .env}
+      MONTHLY_AI_BUDGET_USD: ${MONTHLY_AI_BUDGET_USD:?MONTHLY_AI_BUDGET_USD must be set in .env}
+      DEFAULT_MISSION_BUDGET_USD: ${DEFAULT_MISSION_BUDGET_USD:?DEFAULT_MISSION_BUDGET_USD must be set in .env}
+      MAX_RISK_PER_TRADE_PCT: ${MAX_RISK_PER_TRADE_PCT:?MAX_RISK_PER_TRADE_PCT must be set in .env}
+      MAX_DAILY_LOSS_PCT: ${MAX_DAILY_LOSS_PCT:?MAX_DAILY_LOSS_PCT must be set in .env}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    volumes:
+      - ledger_anchor_data:/data
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      # No wget/curl in python:3.12-slim (verified 2026-09-28) - matches
+      # deploy/Dockerfile.gateway's own HEALTHCHECK, which this overrides.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  approvals_bot:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.approvals_bot
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-burns_os}
+      BURNS_APP_DB_USER: ${BURNS_APP_DB_USER:-burns_app}
+      BURNS_APP_DB_PASSWORD: ${BURNS_APP_DB_PASSWORD:?BURNS_APP_DB_PASSWORD must be set in .env}
+      LEDGER_ANCHOR_PATH: /data/ledger_anchor.jsonl
+      TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:?TELEGRAM_OWNER_CHAT_ID must be set in .env}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set in .env}
+      MONTHLY_AI_BUDGET_USD: ${MONTHLY_AI_BUDGET_USD:?MONTHLY_AI_BUDGET_USD must be set in .env}
+      DEFAULT_MISSION_BUDGET_USD: ${DEFAULT_MISSION_BUDGET_USD:?DEFAULT_MISSION_BUDGET_USD must be set in .env}
+      MAX_RISK_PER_TRADE_PCT: ${MAX_RISK_PER_TRADE_PCT:?MAX_RISK_PER_TRADE_PCT must be set in .env}
+      MAX_DAILY_LOSS_PCT: ${MAX_DAILY_LOSS_PCT:?MAX_DAILY_LOSS_PCT must be set in .env}
+    volumes:
+      - ledger_anchor_data:/data
+
+  # Real periodic process for core/scheduler.py (Tier-3 post-cooling
+  # execution + stale-PENDING expiry) and core/ledger_anchor.py (hourly tail-
+  # truncation anchor) - both modules are deliberately pure logic with no
+  # loop of their own (see their docstrings); this is that loop. Reuses the
+  # gateway image (no separate build) since it already has every module
+  # this needs.
+  scheduler:
+    image: burns_os_system-gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-burns_os}
+      BURNS_APP_DB_USER: ${BURNS_APP_DB_USER:-burns_app}
+      BURNS_APP_DB_PASSWORD: ${BURNS_APP_DB_PASSWORD:?BURNS_APP_DB_PASSWORD must be set in .env}
+      LEDGER_ANCHOR_PATH: /data/ledger_anchor.jsonl
+      TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:?TELEGRAM_OWNER_CHAT_ID must be set in .env}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      MONTHLY_AI_BUDGET_USD: ${MONTHLY_AI_BUDGET_USD:?MONTHLY_AI_BUDGET_USD must be set in .env}
+      DEFAULT_MISSION_BUDGET_USD: ${DEFAULT_MISSION_BUDGET_USD:?DEFAULT_MISSION_BUDGET_USD must be set in .env}
+      MAX_RISK_PER_TRADE_PCT: ${MAX_RISK_PER_TRADE_PCT:?MAX_RISK_PER_TRADE_PCT must be set in .env}
+      MAX_DAILY_LOSS_PCT: ${MAX_DAILY_LOSS_PCT:?MAX_DAILY_LOSS_PCT must be set in .env}
+      SCHEDULER_INTERVAL_SECONDS: ${SCHEDULER_INTERVAL_SECONDS:-60}
+      ANCHOR_INTERVAL_SECONDS: ${ANCHOR_INTERVAL_SECONDS:-3600}
+      RECONCILIATION_STALE_MINUTES: ${RECONCILIATION_STALE_MINUTES:-15}
+    volumes:
+      - ledger_anchor_data:/data
+    command: ["python", "-m", "scripts.scheduler_loop"]
+    # Otherwise inherits the gateway image's own baked-in HEALTHCHECK
+    # (probes localhost:8080/health) - this service runs no HTTP server, so
+    # that would falsely report "unhealthy" forever.
+    healthcheck:
+      disable: true
+
+volumes:
+  postgres_data:
+  langfuse_db_data:
+  ledger_anchor_data:

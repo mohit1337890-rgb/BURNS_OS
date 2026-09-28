@@ -1,0 +1,75 @@
+# Burns OS
+
+Internal AI operating system for Burns Worldwide (Mohit, Founder & CEO). Full
+design/spec lives in the original build prompt this repo was started from -
+see `docs/ARCHITECTURE.md` for the summarized version. **This README states
+only what has actually been built and tested, with evidence.** Nothing here
+is marked "done" without a passing test - see `docs/KNOWN_LIMITS.md` for the
+living, honest, currently-open-vs-closed list (security gaps, blocked items,
+real bugs found and fixed - including several found only by running this
+live against real Docker/Postgres on 2026-09-28/29, not by code review).
+
+## What's real right now (Milestone 1, in progress)
+
+**229 passing pytest tests** (1 intentionally SQLite-only), the DB-touching majority of them running
+against BOTH SQLite (`python -m pytest tests/unit/ -v`, no Docker required)
+AND a real Postgres instance in the same run (`tests/unit/conftest.py`'s
+parametrized `session` fixture - see `docs/KNOWN_LIMITS.md` item 6), plus
+**5 dedicated live-Postgres-only tests** (`make test-pg`) for things SQLite
+structurally can't prove. **All 9 originally-identified security gaps are
+closed, plus a 10th (Postgres app role) found and closed during live
+bring-up**, each with its own test against a real Postgres instance - not
+just SQLite, and not just written-but-unverified. The full Docker Compose
+stack (`postgres`, `langfuse`, `litellm`, `gateway`, `approvals_bot`, and a
+new `scheduler` service) has been run live, with real evidence, per
+`docs/KNOWN_LIMITS.md`'s STEP 1-3 results table.
+
+| Layer | Modules | What it does |
+|---|---|---|
+| **Policy** | `policies/policy.yaml`, `core/policy_engine.py` | Declarative action->tier rules (0=read, 1=sandbox, 2=external+approval, 3=money/irreversible+board review+cooling period), hard-block list, per-plugin enable/required-env, git_push allow-list. |
+| **Ledger** | `core/ledger.py`, `core/ledger_anchor.py` | Append-only, SHA-256 hash-chained audit log + an external anchor (file today, Telegram once a token exists) that catches tail-truncation `verify_chain()` alone can't. |
+| **Budget** | `core/budget_guard.py`, `core/llm_spend.py` | Global monthly + per-mission caps, computed fresh from the Ledger; real LLM token spend counts toward it. |
+| **Approvals** | `core/approvals.py` | Tier 2/3 state machine, SHA-256 params binding (a changed param after approval requires a new one), atomic single-execution claim (a double-tap/replay can't run a plugin twice), 24h expiry, Tier-3 cooling period. |
+| **Scheduler** | `core/scheduler.py` | Executes due Tier-3 approvals post-cooling; expires stale PENDING approvals. |
+| **DLP** | `core/dlp.py` | Refuses to send outgoing content (email/message params) containing a likely secret. |
+| **Missions** | `core/missions.py` | Spec-Kit state machine with a REAL owner-approval binding (`Mission.spec_approval_id` -> an actual `ApprovalRequest`, not just a status string). |
+| **Config** | `core/app_config.py` | Core vars fail loudly at startup if missing; plugin vars are required only when that plugin is enabled in `policy.yaml` - a disabled/misconfigured plugin refuses to execute instead of crashing the Gateway. |
+| **Gateway** | `gateway/core_execute.py`, `gateway/registry_bootstrap.py`, `gateway/plugins/` | The chokepoint itself, wired to real plugins (Telegram, SMTP email, git_push) and honest stubs (Coolify deploy, MT5 trade). Crash-safe: an `EXECUTING` ledger marker is written before a plugin ever runs (see Reconciliation below). |
+| **Gateway HTTP** | `gateway/app.py` | FastAPI server, local API-key auth, `/execute` `/approvals/{id}` `/ledger/verify` `/health`. Tested with `TestClient` AND live over real HTTP (`curl`) against the running Docker container. |
+| **Gateway MCP** | `gateway/mcp_server.py` | The same actions as MCP tools, for a future Hermes container. Has a real `python -m gateway.mcp_server` entry point now, tested by spawning it as a real subprocess and talking to it over real stdio (not just `list_tools()`/`call_tool()` direct calls). |
+| **Approvals Bot** | `approvals_bot/` | Approval Card formatting, owner-only decision handling, real polling-loop logic (`poller.py`) and a real `python -m approvals_bot` entry point - runs live in Docker against a placeholder token (polls, fails auth gracefully, retries); **still hasn't sent/received a real Telegram message** (real bot token still pending). |
+| **Reconciliation** | `core/reconciliation.py`, `scripts/admin_reconcile_approval.py` | Recovers from an approval left inconsistent by a process death: an automatic scheduler job finds a stale `EXECUTING` marker with no result and flips it to `UNKNOWN_OUTCOME` (alerting); a separate, manual, audited admin script handles the one pre-existing case that predates the marker. |
+| **Scheduled process** | `scripts/scheduler_loop.py` (docker-compose `scheduler` service) | The real, running loop for `core/scheduler.py` (Tier-3 post-cooling execution), `core/ledger_anchor.py` (hourly anchor write) and `core/reconciliation.py` - all three were previously "pure logic, no loop of its own." Runs live in Docker now. |
+
+Run the tests yourself:
+
+```bash
+cd burns_os_system
+.venv\Scripts\python.exe -m pytest tests/unit/ -v      # SQLite + Postgres (if reachable) in one run
+make test-pg                                             # live-Postgres-only tests (needs `make up` first)
+```
+
+## How it actually works
+
+1. A caller (an agent, eventually via Hermes MCP; today: a direct Python call, an HTTP `POST /execute`, or a real MCP `execute_action` tool call over stdio - all three go through the exact same `gateway.core_execute.request_action`) asks for an action.
+2. **Hard-block check first** - refused + logged immediately, no tier logic can override it.
+3. **Budget check** - refused if the mission or global monthly cap is already over its stop threshold (real LLM spend counts here too).
+4. **Tier 0/1** - executes in-sandbox immediately, logged only.
+5. **Tier 2/3** - creates an `ApprovalRequest` (with a SHA-256 hash of its own params) and a `PENDING_APPROVAL` ledger entry. **Nothing external has happened yet.**
+6. A human decides via the Approvals Bot (Telegram, owner-chat-id-only, independently re-verified against `TELEGRAM_OWNER_CHAT_ID` - not just trusted from the caller) or the Gateway API directly. If approved, and - for Tier 3 - once the cooling period has elapsed, `execute_approved_action` re-checks the params hash, scans the outgoing content for secrets (DLP), atomically claims the one-time execution right, writes an `EXECUTING` marker, THEN runs the real plugin and logs the final result + cost.
+7. `core/scheduler.py::run_due_tier3_executions` is what actually re-tries a Tier-3 action once its cooling period elapses, if nothing else already did - and it's a real running process now (`scripts/scheduler_loop.py`, the docker-compose `scheduler` service), not just tested logic.
+8. If the process dies between claiming and logging a result, `core/reconciliation.py`'s scheduled pass finds the orphaned `EXECUTING` marker and flips that approval to `UNKNOWN_OUTCOME` for a human to check - proved with a real `os._exit()` mid-plugin-call.
+9. Every step lands in the same hash-chained, concurrency-safe (DB-enforced `UNIQUE` on the hash chain) Ledger; `core.ledger.verify_chain()` + `core.ledger_anchor.verify_against_anchors()` together detect both in-place tampering and tail truncation - the anchor half runs on a real hourly schedule now too.
+10. The Gateway's own Postgres connection (`burns_app`) is a deliberately powerless role - no superuser, no `UPDATE`/`DELETE`/`TRUNCATE` on the Ledger, can't even attempt the `session_replication_role` trigger-bypass trick. Migrations run separately, as a genuinely different admin role, never baked into the Gateway's own environment.
+
+## What's NOT built yet
+
+See `docs/KNOWN_LIMITS.md` for the full, current list. Headline items:
+
+- **Milestone 2 (Hermes Agent container) is explicitly NOT approved yet** - Mohit's own instruction.
+- **Real Telegram** - `TELEGRAM_BOT_TOKEN`/`TELEGRAM_OWNER_CHAT_ID` are still placeholder values. Everything that doesn't need a real Telegram round-trip has been live-tested against real Docker/Postgres (see `docs/KNOWN_LIMITS.md`'s STEP 1-3 results table); blocked until a real token exists: the Approve/Reject card round-trip, cross-account rejection, and the Telegram-alert half of hard-block/DLP refusals and the ledger anchor.
+- Squad Builder, Evals, Monitor & Self-Heal, Daily/Weekly reports, Web Dashboard, all 10 departments' actual tools/roles beyond the generic Gateway plugins, backup/restore scripts.
+
+## Repo layout
+
+See `docs/ARCHITECTURE.md` (to be written) for the full intended layout from the original build prompt. Currently populated: `core/`, `gateway/`, `approvals_bot/`, `policies/`, `configs/`, `deploy/`, `db/migrations/`, `scripts/`, `tests/unit/`, `tests/postgres/`. Everything else under `agents/`, `roles/`, `skills/`, `evals/`, `hermes/`, `sandbox/`, `dashboard/` is an empty directory reserved for later milestones.

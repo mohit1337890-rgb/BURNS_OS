@@ -1,0 +1,18 @@
+# Targets the Security department (soc-analyst, appsec-engineer) is allowed
+# to scan/monitor. A scan/monitor action against anything NOT listed here is
+# refused by the gateway regardless of tier - this is a separate, additive
+# check on top of the normal tier/approval flow (see core/policy_engine.py::
+# check_authorised_scope), because "I have permission to run this kind of
+# action" and "I have permission against THIS target" are different questions.
+#
+# Add an entry only for systems Mohit owns or has explicit written
+# authorization to test. Format: one entry per authorised target.
+
+scopes: []
+# Example (commented out - not an authorised scope until uncommented and real):
+# - target: "trading-ai-dashboard.internal"
+#   type: web_app
+#   owner_confirmed: true
+#   added_by: Mohit
+#   added_at: "2026-09-28"
+#   notes: "Own project, localhost only."

@@ -1,0 +1,22 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY core/ ./core/
+COPY gateway/ ./gateway/
+COPY policies/ ./policies/
+COPY alembic.ini .
+COPY pytest.ini .
+COPY db/ ./db/
+COPY tests/ ./tests/
+COPY scripts/ ./scripts/
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+
+CMD ["uvicorn", "gateway.app:app", "--host", "0.0.0.0", "--port", "8080"]

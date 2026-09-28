@@ -1,0 +1,251 @@
+# Known Limits (Milestone 1, live-tested 2026-09-28/29)
+
+Updated honestly as the build progresses - nothing here gets claimed "done"
+until it has a passing test proving it, and every real bug found during
+live testing is recorded here, not quietly fixed and forgotten.
+
+## Current status
+
+- **229 passing pytest tests** (1 intentionally SQLite-only) against
+  SQLite (`tests/unit/`, no Docker required), with the DB-touching
+  majority of them now ALSO running against a real Postgres instance via
+  a parametrized `session` fixture (`tests/unit/conftest.py`) - see
+  "Item 6" below.
+- **5 dedicated live-Postgres-only tests** (`tests/postgres/`, `make
+  test-pg`) proving things SQLite structurally can't: the append-only
+  trigger, a genuine two-thread concurrency race, the burns_app role's
+  restrictions, and TRUNCATE being blocked.
+- **Docker Compose stack runs for real**: postgres, langfuse(+its own db),
+  litellm(+its own separate db), gateway, approvals_bot, and a new
+  `scheduler` service - all healthy, all live-tested (see below).
+- **9 of the original 9 identified security gaps are closed**, plus a
+  10th found and closed during Postgres bring-up, plus several more real
+  bugs found only by testing live (see "Bugs found while going live"
+  below) - every one has its own regression test.
+
+## Blocking / pending inputs
+
+- **`TELEGRAM_BOT_TOKEN`/`TELEGRAM_OWNER_CHAT_ID` are still placeholder
+  values**, not real ones. Everything that doesn't need a real Telegram
+  round-trip has been live-tested (Tier-0/1 auto-exec, hard-block refusal,
+  DLP refusal, Tier-3 cooling+scheduler auto-exec, the concurrency/
+  idempotency guard, the append-only trigger, the ledger anchor). Blocked
+  until a real token exists: live acceptance tests B (Approve/Reject card)
+  and E (wrong-account rejection) in full, the Telegram-alert half of D
+  and G, and `TelegramAnchorSink`.
+- **Milestone 2 (Hermes Agent container) remains explicitly not approved** -
+  Mohit's own instruction.
+
+## STEP 1-3 live acceptance test results (2026-09-28/29, real Docker + Postgres)
+
+| # | Test | Result |
+|---|------|--------|
+| A | Tier-1 auto-exec, no approval/card | **PASS** (live HTTP) |
+| B | Tier-2 card -> Reject -> Approve -> send | **BLOCKED** on real Telegram |
+| C | Tier-3 stub -> cooling -> scheduler auto-exec | **PASS** (live; found+fixed 2 real bugs along the way - see below) |
+| D | Hard-block refuse + alert | **PASS** (refusal) / alert **BLOCKED** on real Telegram |
+| E | Wrong-account button press -> rejected | **BLOCKED** - needs a second real Telegram account |
+| F | Double-tap Approve -> executes once | **PASS** - real two-thread Postgres concurrency test (the mechanism Telegram itself would hit) |
+| G | DLP fake key -> refuse + alert | **PASS** (refusal) / alert **BLOCKED** on real Telegram |
+
+## Bugs found while going live (all fixed, each with a regression test)
+
+Nothing here was found by code review - every one of these only surfaced
+by actually running the thing against real Docker/Postgres/processes, per
+Mohit's own instruction ("run live, show evidence").
+
+**Infra/build bugs** (the stack couldn't come up at all without these):
+1. `requirements.txt` had no Postgres driver at all.
+2. `deploy/Dockerfile.gateway` never copied `alembic.ini`/`db/`/`tests/`/
+   `pytest.ini`/`scripts/` - migrations and tests couldn't run in the
+   container.
+3. `gateway/app.py`'s startup called `ledger.init_db()`/`create_all()`
+   against real Postgres, racing Alembic's own `CREATE TABLE` - removed;
+   schema ownership belongs to Alembic only against real Postgres.
+4. SQLAlchemy's bare `postgresql://` scheme resolved to `psycopg` (v3, not
+   installed) instead of `psycopg2` - now explicit `postgresql+psycopg2://`.
+5. `docker-compose.yml`'s gateway/litellm healthchecks used `wget`, absent
+   from both images - always "unhealthy" despite the app being fine.
+6. langfuse: Docker's auto-set `HOSTNAME` env var made the Next.js
+   standalone server bind to the container's own IP, not `0.0.0.0` -
+   unreachable via localhost/127.0.0.1 (its own healthcheck included).
+7. langfuse's healthcheck used bare `localhost`, which resolved IPv6 first
+   with nothing listening there - explicit `127.0.0.1` fixed it.
+8. `Makefile`'s `test-pg` ran `pytest tests/ -m postgres`, which tried to
+   collect `tests/unit/test_approvals_bot*.py` inside the gateway
+   container (no `approvals_bot/` package there) - scoped to
+   `tests/postgres/` instead.
+
+**Security bugs:**
+9. `core.approvals.decide_approval()`'s docstring claimed `owner_chat_id`
+   was independently re-verified as "a second gate" against the
+   configured `TELEGRAM_OWNER_CHAT_ID` - the check never actually existed
+   in the code (`NotOwnerError` was defined but never raised anywhere).
+   Only `approvals_bot.bot.handle_callback_query`'s own `from_chat_id`
+   check protected a real decision - one layer, not the two documented.
+   Fixed: the real check now lives in `decide_approval()` itself.
+10. **Postgres app role was a superuser.** `POSTGRES_USER` both bootstraps
+    the Postgres container (making it the superuser, unavoidably - that's
+    how the official image works) AND was the SAME role the app itself
+    connected as. Migration 0002's `REVOKE UPDATE/DELETE` was therefore a
+    no-op (superusers bypass ACL checks entirely), and even the append-only
+    TRIGGER could be bypassed via `SET session_replication_role = replica`
+    (superuser-only, but that's exactly the point). Proved live in a
+    disposable test DB before the fix. **Closed**: migration 0003 creates
+    `burns_app` (NOSUPERUSER, only SELECT+INSERT on `ledger`, full CRUD on
+    `approvals`/`missions`) - gateway/approvals_bot/scheduler all connect
+    as `burns_app` now; migrations run as the admin role
+    (`burns_admin` - the renamed original superuser), injected via `-e`
+    only for that one transient command, never baked into the long-running
+    containers' own environment.
+11. **`execute_approved_action()` had a crash-unsafe window.**
+    `mark_executing()` irreversibly flips an approval to EXECUTED (by
+    design - never auto-retried, since a Tier-3 action might have already
+    reached a real external system) - but the plugin call and the ledger
+    write recording what happened came AFTER that, with nothing in
+    between. Found live during test C: my own new
+    `scripts/scheduler_loop.py` forgot to call `registry_bootstrap.bootstrap()`,
+    so `plugins.get()` raised `NotImplementedError` - and the approval was
+    left permanently EXECUTED with **zero ledger record**, a silent,
+    unrecorded action. Closed in two layers: (a) an `EXECUTING` ledger
+    marker, written and committed BEFORE the plugin is even called, so a
+    genuine process kill (proved with a real `os._exit()` in a real
+    subprocess, `tests/unit/test_reconciliation.py`) still leaves a
+    recoverable trace; (b) a try/except around the plugin call itself for
+    ordinary Python exceptions, logging a `FAILED` entry immediately
+    rather than waiting for the reconciliation job. A new
+    `core/reconciliation.py` module's `run_reconciliation_pass()` (wired
+    into `scripts/scheduler_loop.py`, runs every `SCHEDULER_INTERVAL_SECONDS`)
+    finds any `EXECUTING` marker with no later result after
+    `RECONCILIATION_STALE_MINUTES` (default 15) and flips that approval to
+    `UNKNOWN_OUTCOME`, alerting (stdout today - Telegram once a real token
+    exists) that a human must verify what actually happened.
+12. **The real approval this exact bug produced live**
+    (`d0521604-3749-4cfc-b3f5-0dafcc3681bf`, a Tier-3 `place_trade` stub -
+    no real money/action was ever involved) was reconciled via a new
+    audited admin script, `scripts/admin_reconcile_approval.py`
+    (`core.reconciliation.reconcile_stuck_approval()`): does NOT edit or
+    delete any existing ledger row (append-only, untouched) - appends a
+    new `RECONCILIED_FAILED` entry referencing the approval and moves the
+    approval to a new `FAILED_RECONCILED` status. This was verified live
+    (ledger chain still `ok=True` afterward) - **the actual evidence of
+    that reconciliation was subsequently destroyed by bug #13 below**,
+    an unrelated incident that happened minutes later while wiring up
+    role separation; the mechanism itself remains fully tested (9 tests,
+    `tests/unit/test_reconciliation.py`) and was proven live once.
+13. **litellm shared the same Postgres database as Burns OS's own tables**
+    (`docker-compose.yml`'s `DATABASE_URL` pointed litellm at `${POSTGRES_DB}`,
+    i.e. `burns_os`, same as `ledger`/`approvals`/`missions`). litellm's
+    own Prisma schema-sync ("db push") treats the whole database's public
+    schema as its own and silently **drops any table it doesn't
+    recognize** - it dropped `ledger` (26 rows, including bug #12's
+    reconciliation evidence), `approvals`, and `alembic_version` outright
+    the moment litellm restarted. **Closed**: litellm now has its own
+    dedicated `litellm_db` database on the same Postgres server -
+    Postgres databases (not just schemas) are fully isolated from each
+    other, so this specific failure mode is now structurally impossible,
+    not just avoided by convention.
+14. **`core.ledger.append_entry()`'s hash-chain write wasn't atomic.**
+    Found immediately after fixing #13, via the SAME two-thread
+    concurrency test that proves gap #5/#10: "read the latest hash, then
+    insert" is two separate statements - two genuinely concurrent callers
+    (exactly what that test constructs, and exactly what a real
+    double-tap or overlapping scheduler tick can produce) could both read
+    the same "latest" row before either committed, producing two ledger
+    rows with the SAME `prev_hash` - a forked chain `verify_chain()`
+    correctly detects, but only after the fact. **Closed**: a DB-enforced
+    `UNIQUE` constraint on `prev_hash` (migration 0004, and on the
+    SQLAlchemy model itself so SQLite tests get it via `create_all()` too)
+    plus a retry loop in `append_entry()` - a collision now means "retry
+    with the fresh latest hash," not "silently fork."
+15. **The append-only trigger never covered `TRUNCATE`.** Found while
+    using `TRUNCATE` (as `burns_admin`) to clear the corrupted synthetic
+    test data that bug #14 left behind - a `BEFORE ROW` trigger (migration
+    0002) never fires for `TRUNCATE`, which is statement-level.
+    `burns_app` was never granted `TRUNCATE` (migration 0003), so this was
+    never exploitable by the app's own role - but the append-only CLAIM
+    itself was incomplete without this, and any future grant change could
+    have silently reopened it. **Closed**: migration 0005 adds a
+    `BEFORE TRUNCATE ... FOR EACH STATEMENT` trigger, tested live even
+    against an admin/superuser connection (`tests/postgres/test_postgres_live.py::test_truncate_on_ledger_is_blocked_even_for_admin`).
+16. **`gateway/plugins/email_smtp.py`'s exception handler could leak
+    `SMTP_PASSWORD`.** `except (smtplib.SMTPException, OSError) as exc:`
+    interpolated `str(exc)` directly into the `PluginResult.detail` that
+    becomes a Ledger row - found during the security-claims audit
+    (item 5) by writing a direct test for `TelegramPlugin`/`SmtpEmailPlugin`
+    (neither had ever been tested directly, only via fakes elsewhere).
+    Some SMTP server error responses echo client request data back
+    verbatim; nothing prevented a real password reaching an internal audit
+    log this way. **Closed**: the password is explicitly redacted from
+    the detail string before it's ever returned, matching
+    `TelegramPlugin`'s already-more-careful pattern (which never echoes
+    `resp.text` back either).
+
+## Item 5 - Security-claims audit (2026-09-29)
+
+Grepped every docstring/comment/doc for a claimed security property (gate,
+check, verify, owner, append-only, refuse, block, enforce) and confirmed
+each one has a real test. Gaps found and closed:
+
+| Claim | File | Test |
+|---|---|---|
+| `owner_chat_id` independently re-verified (not just the caller's own check) | `core/approvals.py::decide_approval` | `test_core_execute.py::test_decide_approval_rejects_a_mismatched_owner_chat_id` |
+| All 7 `hard_block` actions actually raise (only 2 had a named test before) | `core/policy_engine.py::classify` | `test_policy_engine.py::test_every_documented_hard_block_action_actually_raises` (parametrized x7) |
+| DLP's *configured-secret-VALUE* substring layer (distinct from the regex-shape layer) | `core/dlp.py::scan_text` | `test_dlp.py` (new file, 4 tests) |
+| `create_approval` refuses a non-Tier-2/3 tier | `core/approvals.py::create_approval` | `test_core_execute.py::test_create_approval_refuses_a_non_tier_2_or_3_tier` |
+| `verify_api_key` returns 503 (not 401) when the server itself has no token configured | `gateway/app.py::verify_api_key` | `test_gateway_app.py::test_execute_returns_503_when_server_has_no_token_configured` |
+| Budget guard's own claims (mission vs. monthly cap, warn/stop thresholds) - previously only indirectly exercised | `core/budget_guard.py` | `test_budget_guard.py` (new file, 7 tests) |
+| Append-only also covers `TRUNCATE` | `db/migrations/versions/0005_*` | `test_postgres_live.py::test_truncate_on_ledger_is_blocked_even_for_admin` |
+| `TelegramPlugin`/`SmtpEmailPlugin` never leak the token/password into a Ledger-bound detail string | `gateway/plugins/telegram.py`, `email_smtp.py` | `test_telegram_plugin.py`, `test_email_smtp_plugin.py` (new files; the SMTP one caught bug #16 above) |
+| `database_url` never uses the admin role | `core/app_config.py::load_core_config` | `test_app_config.py::test_load_core_config_database_url_never_uses_the_admin_role` |
+| `core.ledger.append_entry()` is the only write path, hash-chain safe under concurrency | `core/ledger.py` | `test_ledger.py` + `test_postgres_live.py`'s two-thread test (found bug #14) |
+| burns_app can't bypass via grant OR `session_replication_role` | `db/migrations/versions/0003_*` | `test_postgres_live.py::test_direct_update/delete_on_ledger_is_blocked_by_grant`, `test_app_connection_is_the_restricted_burns_app_role_not_a_superuser`, `test_burns_app_cannot_bypass_the_trigger_via_session_replication_role`, `test_burns_app_update_is_blocked_by_the_trigger_even_if_granted` |
+
+Claims that were ALREADY adequately tested (a non-exhaustive sample, to
+show the audit wasn't only gap-finding): hard-block-before-tier-logic
+ordering, Tier-3 cooling period, params-hash rebinding after approval,
+mark_executing's atomic single-winner claim, `is_target_authorised`'s
+scope-file check, `/health` needing no auth, the bot's owner-only
+`from_chat_id` check, `expire_pending_approvals`, the git_push
+path-traversal guard, disabled-plugin refusal without crashing the
+Gateway.
+
+## Item 6 - Full suite parametrized sqlite/postgres (2026-09-29)
+
+`tests/unit/conftest.py` adds a `session` fixture parametrized over
+`["sqlite", "postgres"]` - most DB-touching test files
+(`test_ledger.py`, `test_core_execute.py`, `test_scheduler.py`,
+`test_reconciliation.py`, `test_missions.py`, `test_budget_guard.py`,
+`test_llm_spend.py`, `test_ledger_anchor.py`) now run against BOTH
+automatically. The Postgres half:
+- Connects as `burns_app` (same role the real Gateway uses), against a
+  SEPARATE, dedicated `burns_os_test` database (not the "live" `burns_os`
+  this session's manual bring-up testing has been writing real demo/
+  evidence rows into - found live: SAVEPOINT-based per-test rollback only
+  isolates a test's own NEW writes, it does not hide rows some earlier,
+  already-committed transaction left behind).
+- Uses the standard SQLAlchemy "join a Session into an external
+  transaction" SAVEPOINT recipe for per-test isolation - every test's
+  writes (including `core.ledger.append_entry()`'s own internal
+  rollback-and-retry on a hash collision) are discarded at teardown.
+- Skips (not fails) automatically when Postgres isn't reachable, so CI or
+  a dev machine without `make up` running still gets the SQLite half.
+- One test (`test_ledger.py::test_append_entry_retries_on_a_prev_hash_collision`)
+  is SQLite-only by design - its own single-thread SAVEPOINT-within-a-
+  SAVEPOINT simulation doesn't play well with the outer per-test SAVEPOINT,
+  and the thing it proves is already proven far more convincingly by
+  `test_postgres_live.py`'s genuine two-thread test.
+
+`tests/unit/test_gateway_app.py` and `test_mcp_server.py` were
+deliberately left SQLite-only - both build their own
+session-factory/multi-connection wiring (StaticPool for a shared
+in-memory DB across TestClient's requests) that doesn't map cleanly onto
+the parametrized fixture, and their real HTTP/MCP-transport behavior is
+already covered live (see README).
+
+## Not yet started
+
+Squad Builder, Evals, Monitor & Self-Heal, Daily/Weekly reports, Web
+Dashboard, all 10 departments' actual tools/roles beyond the generic
+Gateway plugins, backup/restore scripts, Milestone 2 (Hermes Agent
+container) - explicitly not approved yet.
