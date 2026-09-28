@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from core.ledger import LedgerEntry
@@ -145,6 +146,16 @@ def verify_against_anchors(session: Session, sinks: list[AnchorSink]) -> AnchorV
     matches. The FIRST mismatch (in anchor-chronological order) is
     reported - that's the earliest point after which truncation/tampering
     could have occurred.
+
+    A MISSING ledger table (not just an empty or truncated one) is also
+    treated as a hard verification failure, not left to crash the caller -
+    found during the 2026-09-29 incident review (docs/incidents/2026-09-litellm-table-drop.md):
+    the whole point of an external anchor is to catch exactly this kind of
+    damage, and a query against a table that no longer exists at all must
+    report "verification failed", not raise an unhandled 500 from
+    gateway/app.py's /ledger/verify. An EMPTY table (exists, zero rows)
+    already worked correctly before this fix - every anchored id's lookup
+    returns None, which is the "no longer exists" branch above.
     """
     all_records: list[AnchorRecord] = []
     for sink in sinks:
@@ -154,7 +165,14 @@ def verify_against_anchors(session: Session, sinks: list[AnchorSink]) -> AnchorV
     checked = 0
     for record in all_records:
         checked += 1
-        row = session.query(LedgerEntry).filter_by(id=record.last_id).first()
+        try:
+            row = session.query(LedgerEntry).filter_by(id=record.last_id).first()
+        except DBAPIError as exc:
+            session.rollback()  # the failed query leaves the session's transaction unusable otherwise
+            return AnchorVerification(
+                ok=False, checked_anchors=checked, failed_anchor=record,
+                reason=f"Could not query the ledger table while checking anchor id={record.last_id} - it may be missing entirely: {exc.orig}",
+            )
         if row is None:
             return AnchorVerification(
                 ok=False, checked_anchors=checked, failed_anchor=record,

@@ -6,15 +6,19 @@ live testing is recorded here, not quietly fixed and forgotten.
 
 ## Current status
 
-- **229 passing pytest tests** (1 intentionally SQLite-only) against
+- **231 passing pytest tests** (1 intentionally SQLite-only) against
   SQLite (`tests/unit/`, no Docker required), with the DB-touching
   majority of them now ALSO running against a real Postgres instance via
   a parametrized `session` fixture (`tests/unit/conftest.py`) - see
   "Item 6" below.
-- **5 dedicated live-Postgres-only tests** (`tests/postgres/`, `make
+- **11 dedicated live-Postgres-only tests** (`tests/postgres/`, `make
   test-pg`) proving things SQLite structurally can't: the append-only
   trigger, a genuine two-thread concurrency race, the burns_app role's
-  restrictions, and TRUNCATE being blocked.
+  restrictions, TRUNCATE being blocked, and (litellm_app's isolation +
+  burns_app's lack of DDL rights) the 2026-09-29 incident follow-up. 3 of
+  the 11 need admin (`burns_admin`)/`litellm_app` creds injected via `-e`
+  (skip cleanly otherwise) - see each test's own docstring for the exact
+  command.
 - **Docker Compose stack runs for real**: postgres, langfuse(+its own db),
   litellm(+its own separate db), gateway, approvals_bot, and a new
   `scheduler` service - all healthy, all live-tested (see below).
@@ -242,6 +246,82 @@ session-factory/multi-connection wiring (StaticPool for a shared
 in-memory DB across TestClient's requests) that doesn't map cleanly onto
 the parametrized fixture, and their real HTTP/MCP-transport behavior is
 already covered live (see README).
+
+## Incident follow-up (2026-09-29) - see `docs/incidents/2026-09-litellm-table-drop.md`
+
+Full postmortem in that file. Summary of what changed:
+
+- **`litellm_app`**: a new, dedicated, `NOSUPERUSER` Postgres role that owns
+  `litellm_db` and nothing else. `burns_os`'s default `PUBLIC CONNECT`
+  grant is revoked (migration `0006`) - `litellm_app` cannot even open a
+  connection to `burns_os` now, proven live
+  (`test_litellm_app_cannot_connect_to_burns_os`).
+- **`burns_app` has no DDL rights** on `burns_os` - confirmed live
+  (`CREATE TABLE` -> `permission denied for schema public`), not just
+  assumed from Postgres 16's default -
+  `test_burns_app_has_no_ddl_rights_on_burns_os`.
+- **langfuse** was already isolated by construction (its own separate
+  `langfuse-db` *container/server*, not just a database) - no code change
+  needed, confirmed by re-reading `docker-compose.yml`.
+- `core.ledger.verify_chain()` / `core.ledger_anchor.verify_against_anchors()`
+  now fail cleanly (`ok: False`, clear reason) instead of raising an
+  unhandled `DBAPIError` when the `ledger` table is missing entirely (an
+  empty-but-existing table already worked correctly before this) - proved
+  live against the freshly-recreated `burns_os`, before migrations were
+  reapplied:
+  ```
+  ChainVerification(ok=False, total_entries=0, first_broken_id=None,
+    reason='Could not query the ledger table - it may be missing entirely: ...')
+  AnchorVerification(ok=False, checked_anchors=1, failed_anchor=...,
+    reason='Could not query the ledger table while checking anchor id=8 ...')
+  ```
+- **The live DB fork was not truncated.** Per instruction: `pg_dump`'d the
+  full corrupted `burns_os` to `backups/burns_os_incident_20260929.dump`
+  (+ `.sha256`), copied the pre-incident anchor file to
+  `backups/ledger_anchor_incident_20260929.jsonl` (+ `.sha256`), renamed
+  the live corrupted database aside to `burns_os_incident_20260929`
+  (still on the same Postgres server, not dropped), then created a fresh
+  `burns_os` and ran all 6 migrations cleanly. `LEDGER_ANCHOR_PATH` now
+  points at a new file (`ledger_anchor_v2_20260929.jsonl`) rather than
+  editing/deleting the old one, which is kept as historical record too.
+  Post-recreation: `chain_ok: true, anchor_ok: true` on the live
+  `/ledger/verify` endpoint.
+
+## Backups (`make backup` / `make restore`, 2026-09-29)
+
+`scripts/backup.py`: nightly `pg_dump` of `burns_os` (custom format) +
+the ledger anchor file, both GPG-encrypted (AES256 symmetric,
+`BACKUP_ENCRYPTION_PASSPHRASE` in `.env`), each with a `.sha256` sidecar.
+Local retention is `BACKUP_RETENTION_DAYS` (default 14, auto-pruned every
+run). Also copied to `BACKUP_OFFSITE_DIR` - **not actually offsite yet**,
+see that var's TODO in `.env`/`.env.example`: it's a second local folder
+until Mohit picks a real destination (S3, another host, etc.).
+
+`scripts/restore.py`: verifies the archive's checksum first (refuses a
+tampered/corrupted archive), decrypts, restores into a **fresh, separate**
+database (never touches the live `burns_os`), then runs
+`core.ledger.verify_chain()` against the restored data and fails loudly
+if it doesn't check out.
+
+**Tested live end-to-end** (2026-09-28/29): `make backup` produced
+`backups/burns_os_20260928_212901.dump.gpg` (4526 bytes) +
+`..._anchor.jsonl.gpg` (248 bytes); `make restore
+ARCHIVE=backups/burns_os_20260928_212901.dump.gpg` restored into
+`burns_os_restore_test_20260928_212910` and reported
+`RESTORE_VERIFY_CHAIN_OK=True entries=14`. Test database dropped after
+confirming (a throwaway restore target, not the live DB).
+
+Neither script is wired to a real nightly cron/scheduler process yet
+(same status `core/scheduler.py` was in before `scripts/scheduler_loop.py`
+existed) - that's the next step once Mohit confirms this approach.
+
+## Git
+
+`scripts/git-hooks/pre-commit` (tracked in the repo; install via
+`make install-hooks`, since `.git/hooks/` itself is never tracked) runs
+`gitleaks protect --staged` via Docker before every commit, refusing to
+commit if it finds a likely secret. Installed and active for this repo
+now.
 
 ## Not yet started
 

@@ -45,6 +45,26 @@ def test_verify_chain_ok_on_untampered_ledger(session):
     assert result.first_broken_id is None
 
 
+def test_verify_chain_fails_cleanly_when_the_table_is_missing_entirely():
+    """Closes a gap found during the 2026-09-29 incident review
+    (docs/incidents/2026-09-litellm-table-drop.md): before this fix,
+    verify_chain() against a database where `ledger` doesn't exist at all
+    (exactly what litellm's schema-sync left behind) raised an unhandled
+    DBAPIError instead of reporting a clean ok=False - which would have
+    meant gateway/app.py's /ledger/verify 500ing instead of clearly
+    reporting "verification failed" during the actual incident.
+    SQLite-specific (not the parametrized fixture): deliberately does NOT
+    call ledger.init_db(), so there is no `ledger` table on this engine.
+    """
+    engine = ledger.get_engine("sqlite:///:memory:")
+    factory = ledger.get_session_factory(engine)
+    s = factory()
+    result = ledger.verify_chain(s)
+    assert result.ok is False
+    assert "missing" in result.reason.lower() or "does not exist" in result.reason.lower() or "no such table" in result.reason.lower()
+    s.close()
+
+
 def test_verify_chain_ok_on_empty_ledger(session):
     result = ledger.verify_chain(session)
     assert result.ok is True

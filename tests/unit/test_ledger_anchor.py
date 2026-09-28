@@ -11,6 +11,29 @@ def _entry(action="a") -> ledger.LedgerEntryInput:
     )
 
 
+def test_verify_against_anchors_fails_cleanly_when_the_table_is_missing_entirely(tmp_path):
+    """Closes a gap found during the 2026-09-29 incident review
+    (docs/incidents/2026-09-litellm-table-drop.md) - the exact scenario
+    litellm's schema-sync produced live: an anchor file with real records,
+    pointed at a database where `ledger` no longer exists at all. Before
+    this fix, verify_against_anchors() raised an unhandled DBAPIError
+    instead of a clean ok=False. SQLite-specific: builds its own engine
+    WITHOUT ledger.init_db(), and a pre-existing anchor file (as if
+    written before the table vanished) rather than the parametrized
+    `session` fixture.
+    """
+    sink = ledger_anchor.FileAnchorSink(tmp_path / "anchor.jsonl")
+    sink.write(ledger_anchor.AnchorRecord(last_id=1, last_hash="a" * 64, timestamp="2026-09-29T00:00:00+00:00"))
+
+    engine = ledger.get_engine("sqlite:///:memory:")
+    factory = ledger.get_session_factory(engine)
+    s = factory()
+    result = ledger_anchor.verify_against_anchors(s, [sink])
+    assert result.ok is False
+    assert "missing" in result.reason.lower() or "does not exist" in result.reason.lower() or "no such table" in result.reason.lower()
+    s.close()
+
+
 def test_write_anchor_returns_none_on_empty_ledger(session, tmp_path):
     sink = ledger_anchor.FileAnchorSink(tmp_path / "anchor.jsonl")
     record = ledger_anchor.write_anchor(session, [sink])

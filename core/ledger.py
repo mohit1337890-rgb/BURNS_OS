@@ -29,7 +29,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
 )
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 GENESIS_HASH = "0" * 64
@@ -205,8 +205,19 @@ def verify_chain(session: Session) -> ChainVerification:
     """Recomputes every row's hash from its own stored fields and compares
     it against both the stored hash AND the next row's stored prev_hash -
     this is what `burns ledger verify` (scripts/ledger_verify.py) calls.
+
+    A missing ledger table is also a hard verification failure, not an
+    unhandled crash - see core/ledger_anchor.py::verify_against_anchors's
+    matching fix and docs/incidents/2026-09-litellm-table-drop.md for why.
     """
-    rows = session.query(LedgerEntry).order_by(LedgerEntry.id.asc()).all()
+    try:
+        rows = session.query(LedgerEntry).order_by(LedgerEntry.id.asc()).all()
+    except DBAPIError as exc:
+        session.rollback()  # the failed query leaves the session's transaction unusable otherwise
+        return ChainVerification(
+            ok=False, total_entries=0, first_broken_id=None,
+            reason=f"Could not query the ledger table - it may be missing entirely: {exc.orig}",
+        )
     expected_prev = GENESIS_HASH
     for row in rows:
         if row.prev_hash != expected_prev:

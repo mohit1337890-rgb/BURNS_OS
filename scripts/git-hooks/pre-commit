@@ -1,0 +1,32 @@
+#!/bin/sh
+# Gitleaks pre-commit hook - scans STAGED changes for secrets before
+# allowing a commit. Runs gitleaks via Docker (no local gitleaks install
+# required - this repo's dev machine only has it via
+# `docker run zricethezav/gitleaks`, see the 2026-09-29 repo audit).
+#
+# Installed by copying this file to .git/hooks/pre-commit (see
+# `make install-hooks`) - .git/hooks/ itself is never tracked by git, so
+# this tracked copy plus an explicit install step is what actually gets
+# it onto a fresh clone.
+
+export MSYS_NO_PATHCONV=1  # Windows/Git Bash: stop it mangling the -v /repo path below
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "pre-commit: docker not found on PATH - cannot run the gitleaks secret scan. Refusing to commit blind." >&2
+    echo "pre-commit: install Docker, or if you're certain this commit has no secrets, use 'git commit --no-verify'." >&2
+    exit 1
+fi
+
+docker run --rm -v "${REPO_ROOT}:/repo" zricethezav/gitleaks:latest protect --source=/repo --staged --redact --verbose
+status=$?
+
+if [ $status -ne 0 ]; then
+    echo "" >&2
+    echo "pre-commit: gitleaks found a likely secret in your staged changes - commit blocked." >&2
+    echo "pre-commit: fix it, or if this is a confirmed false positive, 'git commit --no-verify' (use sparingly)." >&2
+    exit 1
+fi
+
+exit 0

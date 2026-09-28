@@ -8,14 +8,17 @@ is marked "done" without a passing test - see `docs/KNOWN_LIMITS.md` for the
 living, honest, currently-open-vs-closed list (security gaps, blocked items,
 real bugs found and fixed - including several found only by running this
 live against real Docker/Postgres on 2026-09-28/29, not by code review).
+See `docs/incidents/2026-09-litellm-table-drop.md` for the one real
+incident this live testing caused (litellm briefly shared, and its
+schema-sync dropped, Burns OS's own tables) and how it was closed.
 
 ## What's real right now (Milestone 1, in progress)
 
-**229 passing pytest tests** (1 intentionally SQLite-only), the DB-touching majority of them running
+**231 passing pytest tests** (1 intentionally SQLite-only), the DB-touching majority of them running
 against BOTH SQLite (`python -m pytest tests/unit/ -v`, no Docker required)
 AND a real Postgres instance in the same run (`tests/unit/conftest.py`'s
 parametrized `session` fixture - see `docs/KNOWN_LIMITS.md` item 6), plus
-**5 dedicated live-Postgres-only tests** (`make test-pg`) for things SQLite
+**11 dedicated live-Postgres-only tests** (`make test-pg`; 3 need admin creds injected, see their docstrings) for things SQLite
 structurally can't prove. **All 9 originally-identified security gaps are
 closed, plus a 10th (Postgres app role) found and closed during live
 bring-up**, each with its own test against a real Postgres instance - not
@@ -40,6 +43,7 @@ new `scheduler` service) has been run live, with real evidence, per
 | **Approvals Bot** | `approvals_bot/` | Approval Card formatting, owner-only decision handling, real polling-loop logic (`poller.py`) and a real `python -m approvals_bot` entry point - runs live in Docker against a placeholder token (polls, fails auth gracefully, retries); **still hasn't sent/received a real Telegram message** (real bot token still pending). |
 | **Reconciliation** | `core/reconciliation.py`, `scripts/admin_reconcile_approval.py` | Recovers from an approval left inconsistent by a process death: an automatic scheduler job finds a stale `EXECUTING` marker with no result and flips it to `UNKNOWN_OUTCOME` (alerting); a separate, manual, audited admin script handles the one pre-existing case that predates the marker. |
 | **Scheduled process** | `scripts/scheduler_loop.py` (docker-compose `scheduler` service) | The real, running loop for `core/scheduler.py` (Tier-3 post-cooling execution), `core/ledger_anchor.py` (hourly anchor write) and `core/reconciliation.py` - all three were previously "pure logic, no loop of its own." Runs live in Docker now. |
+| **Backups** | `scripts/backup.py`, `scripts/restore.py` | `make backup`: GPG-encrypted `pg_dump` + anchor file, 14-day retention. `make restore`: checksummed, decrypts, restores into a fresh test DB, verifies the chain - never touches the live DB. Tested live end-to-end (`docs/KNOWN_LIMITS.md`). Not yet wired to a real nightly scheduler. |
 
 Run the tests yourself:
 

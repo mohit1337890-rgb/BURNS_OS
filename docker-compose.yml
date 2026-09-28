@@ -86,20 +86,25 @@ services:
         condition: service_healthy
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env}
-      # CRITICAL - a SEPARATE database (litellm_db), never ${POSTGRES_DB}
-      # (burns_os). Found live (2026-09-28): litellm's Prisma schema-sync
-      # ("db push") treats the entire connected database's public schema as
-      # its own and silently DROPS any table it doesn't recognize - it
-      # dropped ledger (26 rows), approvals (7 rows) and alembic_version
-      # outright when it was pointed at burns_os. Postgres databases (not
-      # just schemas) are fully isolated from each other on the same
-      # server/role - a different DATABASE NAME here, same postgres
-      # container, is sufficient; no separate postgres service needed (see
-      # KNOWN_LIMITS for the incident writeup). litellm_db is created once,
-      # manually, by an admin (`CREATE DATABASE litellm_db` as burns_admin)
-      # - not by this compose file, same reasoning as burns_app not being
+      # CRITICAL - a SEPARATE database (litellm_db) AND a separate,
+      # dedicated role (litellm_app), never burns_os / burns_admin. Found
+      # live (2026-09-28, docs/incidents/2026-09-litellm-table-drop.md):
+      # litellm's Prisma schema-sync ("db push") treats the entire
+      # connected database's public schema as its own and silently DROPS
+      # any table it doesn't recognize - it dropped ledger (26 rows),
+      # approvals (7 rows) and alembic_version outright when it was
+      # pointed at burns_os (as burns_admin, a superuser with unrestricted
+      # access to every database on this server). Two independent layers
+      # now: (1) litellm_db is a separate DATABASE - Postgres databases are
+      # fully isolated from each other, so this specific failure mode is
+      # structurally impossible now, not just avoided by convention; (2)
+      # litellm_app OWNS litellm_db but has ZERO grants on burns_os (no
+      # CONNECT even) - a bug or a compromised litellm couldn't reach
+      # burns_os's tables even if it were somehow pointed at the wrong
+      # database again. Both created once, manually, by an admin - not by
+      # this compose file, same reasoning as burns_app not being
       # auto-created by the postgres image's own bootstrap.
-      DATABASE_URL: postgresql://${POSTGRES_USER:-burns_admin}:${POSTGRES_PASSWORD}@postgres:5432/litellm_db
+      DATABASE_URL: postgresql://${LITELLM_DB_USER:-litellm_app}:${LITELLM_DB_PASSWORD:?LITELLM_DB_PASSWORD must be set in .env}@postgres:5432/litellm_db
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
@@ -135,7 +140,7 @@ services:
       # this long-running container's own environment. KNOWN_LIMITS gap #10.
       BURNS_APP_DB_USER: ${BURNS_APP_DB_USER:-burns_app}
       BURNS_APP_DB_PASSWORD: ${BURNS_APP_DB_PASSWORD:?BURNS_APP_DB_PASSWORD must be set in .env}
-      LEDGER_ANCHOR_PATH: /data/ledger_anchor.jsonl
+      LEDGER_ANCHOR_PATH: /data/ledger_anchor_v2_20260929.jsonl
       TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:?TELEGRAM_OWNER_CHAT_ID must be set in .env}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN:?GATEWAY_INTERNAL_TOKEN must be set in .env}
@@ -175,7 +180,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-burns_os}
       BURNS_APP_DB_USER: ${BURNS_APP_DB_USER:-burns_app}
       BURNS_APP_DB_PASSWORD: ${BURNS_APP_DB_PASSWORD:?BURNS_APP_DB_PASSWORD must be set in .env}
-      LEDGER_ANCHOR_PATH: /data/ledger_anchor.jsonl
+      LEDGER_ANCHOR_PATH: /data/ledger_anchor_v2_20260929.jsonl
       TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:?TELEGRAM_OWNER_CHAT_ID must be set in .env}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set in .env}
       MONTHLY_AI_BUDGET_USD: ${MONTHLY_AI_BUDGET_USD:?MONTHLY_AI_BUDGET_USD must be set in .env}
@@ -205,7 +210,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-burns_os}
       BURNS_APP_DB_USER: ${BURNS_APP_DB_USER:-burns_app}
       BURNS_APP_DB_PASSWORD: ${BURNS_APP_DB_PASSWORD:?BURNS_APP_DB_PASSWORD must be set in .env}
-      LEDGER_ANCHOR_PATH: /data/ledger_anchor.jsonl
+      LEDGER_ANCHOR_PATH: /data/ledger_anchor_v2_20260929.jsonl
       TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:?TELEGRAM_OWNER_CHAT_ID must be set in .env}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       MONTHLY_AI_BUDGET_USD: ${MONTHLY_AI_BUDGET_USD:?MONTHLY_AI_BUDGET_USD must be set in .env}

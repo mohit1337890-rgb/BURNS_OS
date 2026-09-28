@@ -3,7 +3,7 @@
 # Docker/WSL2 (see docs/KNOWN_LIMITS.md). `test` and `verify-ledger` work
 # today against SQLite with no Docker dependency.
 
-.PHONY: up down migrate test test-pg verify-ledger logs
+.PHONY: up down migrate test test-pg verify-ledger logs backup restore install-hooks
 
 up:
 	docker compose up -d --build
@@ -47,3 +47,21 @@ verify-ledger:
 
 logs:
 	docker compose logs -f --tail=200
+
+# Nightly pg_dump + anchor file, GPG-encrypted, 14-day local retention +
+# a second-location copy (see BACKUP_OFFSITE_DIR's TODO in .env - not
+# actually offsite yet). Requires `make up` first.
+backup:
+	.venv/Scripts/python.exe scripts/backup.py
+
+# Restores a backup into a FRESH test database (never touches the live
+# burns_os) and verifies it. Usage: make restore ARCHIVE=backups/burns_os_<ts>.dump.gpg
+restore:
+	.venv/Scripts/python.exe scripts/restore.py $(ARCHIVE)
+
+# .git/hooks/ is never tracked by git - this copies the checked-in hook
+# (scripts/git-hooks/pre-commit) into place. Run this once after cloning.
+install-hooks:
+	cp scripts/git-hooks/pre-commit .git/hooks/pre-commit
+	chmod +x .git/hooks/pre-commit
+	@echo "Installed gitleaks pre-commit hook."

@@ -202,6 +202,45 @@ def test_burns_app_update_is_blocked_by_the_trigger_even_if_granted(pg_engine, p
         admin_engine.dispose()
 
 
+def test_burns_app_has_no_ddl_rights_on_burns_os(pg_session):
+    """Closes a gap found during the 2026-09-29 incident follow-up
+    (docs/incidents/2026-09-litellm-table-drop.md): burns_app must not be
+    able to CREATE/ALTER/DROP/TRUNCATE anything in burns_os's schema -
+    confirmed live rather than merely relied upon from Postgres 15+'s
+    default (PUBLIC no longer gets schema CREATE by default), since a
+    relied-upon-but-unverified default is exactly the kind of assumption
+    that contributed to this incident in the first place."""
+    with pytest.raises(DBAPIError) as exc_info:
+        pg_session.execute(text("CREATE TABLE evil_table (id int)"))
+    pg_session.rollback()
+    assert "permission denied" in str(exc_info.value).lower()
+
+
+def test_litellm_app_cannot_connect_to_burns_os():
+    """Closes a gap found live during the 2026-09-29 incident follow-up:
+    moving litellm to its own database wasn't sufficient on its own -
+    Postgres grants CONNECT on every database to PUBLIC by default, so
+    litellm_app (an otherwise entirely unrelated role) could still open a
+    connection to burns_os and run read queries, even with zero table
+    grants there. Migration 0006 revokes PUBLIC's CONNECT. Needs
+    LITELLM_DB_USER/LITELLM_DB_PASSWORD injected (not in the gateway
+    container's normal environment, by design - see docker-compose.yml):
+        docker compose exec -e LITELLM_DB_USER=litellm_app -e LITELLM_DB_PASSWORD=<pw> \\
+            gateway python -m pytest tests/postgres/ -v -m postgres
+    """
+    user = os.environ.get("LITELLM_DB_USER")
+    password = os.environ.get("LITELLM_DB_PASSWORD")
+    if not user or not password:
+        pytest.skip("LITELLM_DB_USER/LITELLM_DB_PASSWORD not injected into this environment - see this test's docstring.")
+    litellm_url = f"postgresql+psycopg2://{user}:{password}@{os.environ['POSTGRES_HOST']}:{os.environ['POSTGRES_PORT']}/{os.environ['POSTGRES_DB']}"
+    engine = ledger.get_engine(litellm_url)
+    with pytest.raises(DBAPIError) as exc_info:
+        with engine.connect():
+            pass
+    engine.dispose()
+    assert "permission denied" in str(exc_info.value).lower()
+
+
 def test_app_connection_is_the_restricted_burns_app_role_not_a_superuser(pg_session):
     """The foundational check for KNOWN_LIMITS gap #10 - if this ever
     regresses back to a superuser role, every test below it about
