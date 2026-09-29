@@ -42,8 +42,11 @@ live testing is recorded here, not quietly fixed and forgotten.
   until a real token exists: live acceptance tests B (Approve/Reject card)
   and E (wrong-account rejection) in full, the Telegram-alert half of D
   and G, and `TelegramAnchorSink`.
-- **Milestone 2 (Hermes Agent container) remains explicitly not approved** -
-  Mohit's own instruction.
+- **Milestone 2 status: SECURITY COMPLETE, FUNCTIONAL TESTS e + i NOT
+  PASSED** (corrected 2026-09-29 after honest live-LLM testing - see
+  `docs/evidence/milestone2_acceptance_tests_e_f_g_i.md`, the full
+  acceptance-test tracker at the bottom of this file, and the punch list
+  below).
 
 ## STEP 1-3 live acceptance test results (2026-09-28/29, real Docker + Postgres)
 
@@ -453,23 +456,80 @@ committed - see the Dashboard section above):
   plain HTTP" and recommended disabling the flag for localhost-only
   access) - `DASHBOARD_COOKIE_SECURE` should just stay `true` always.
 
-## Milestone 2 (Hermes): design updated, still explicitly not approved
+## Milestone 2 (Hermes): approved and built - SECURITY COMPLETE, FUNCTIONAL TESTS e + i NOT PASSED
 
-`docs/MILESTONE_2_HERMES_DESIGN.md` - design only, no code. Interface is
-now the Dashboard's Command box -> Hermes (not Telegram). Hermes's
-credential model is precisely two narrow, revocable tokens (an
-MCP-endpoint auth token distinct from `GATEWAY_INTERNAL_TOKEN`, and a
-budget-capped LiteLLM virtual key, not the master key) - explicitly not
-"zero" as a hand-wave, but zero REAL external-system credentials
-(no Telegram/SMTP/DB/trading/git access, direct or otherwise). The
-Gateway's MCP server needs a second transport (`streamable-http`, not
-just `stdio`) for a separate container to reach it - `gateway/mcp_server.py`'s
-`build_server()` already supports this, unused so far. Milestone 2 code
-still requires Mohit's explicit approval before any of this is built.
+`docs/MILESTONE_2_HERMES_DESIGN.md` v2 was approved 2026-09-29 and
+implemented in 6 steps (Gateway MCP auth + role limits, web_fetch/
+handoff plugins, real hermes-researcher/hermes-chief containers, Dashboard
+Command box dispatch, reconciliation, and a real-LLM acceptance-test
+round) - see `docs/evidence/milestone2_step*.md` and
+`docs/evidence/milestone2_acceptance_tests_e_f_g_i.md` for the full,
+evidenced trail. Corrected status, 2026-09-29, after Mohit's own review
+of the honest test results: **not** "done" - **security complete,
+functional tests e + i not passed**.
+
+**Security/infrastructure - all live-tested, all passing:**
+- Real `nousresearch/hermes-agent` containers, pinned to an exact image
+  digest (not `:latest`).
+- Network isolation: no route to Postgres/internet from either Hermes
+  container, proven even by raw-IP ping (not just DNS blocking).
+- Per-agent MCP bearer tokens + server-side role limits: a token from one
+  agent cannot act as the other, even when the request's own JSON params
+  claim otherwise (proven live).
+- The researcher/chief handoff (`submit_research_report`/
+  `get_research_report`) is an ordinary Tier-0 Gateway action, UNTRUSTED-
+  wrapped, Ledger-logged.
+- A real end-to-end Tier-2/3 flow (test f): a Hermes-initiated Tier-3
+  request genuinely required a fresh TOTP on the Dashboard, genuinely
+  waited out its real 10-minute cooling period, and was genuinely
+  execution-attempted by the scheduler.
+- A real budget cap (test g): temporary test pricing made LiteLLM's own
+  cap trigger and cleanly refuse a second call.
+- A free-model data-safety guardrail (keyword-based today - see the punch
+  list below for the data-class-tagging upgrade Mohit asked for).
+- `memory` disabled for both agents (memory-poisoning mitigation).
+
+**NOT passed - two real gaps, not glossed over:**
+- **Test (e) / handoff-injection**: no external effect occurred in 3 real
+  attempts, but not cleanly via "a capable model read untrusted content
+  and chose not to act" in any of them - see the punch list below for
+  why and the re-test plan.
+- **Test (i)**: `chief_of_staff` has no delegation mechanism to
+  `hermes-researcher` (a real code gap, not model quality - flagged "TBD"
+  in the original design, never built) - the Command box cannot yet
+  produce a genuine research report this way. Punch list item 1 closes
+  this.
+
+### Punch list (Mohit's 2026-09-29 follow-up, in progress)
+
+1. **`delegate_research` Tier-0 Gateway tool** (chief_of_staff-only):
+   chief creates a research job for hermes-researcher; the researcher
+   does the real web_fetch/submit_research_report work; chief reads the
+   result and posts the final answer to the Command status. Everything
+   ledger-linked to the CommandRequest id. Closes test (i)'s real
+   architecture gap.
+2. **"No ledger, no claim" verifier**: every final report must cite
+   sources by ledger entry id; the Gateway checks each cited id is a
+   real `web_fetch`/`web_search` entry for that specific command before
+   trusting it - an unverified citation marks the report UNVERIFIED on
+   the Dashboard + an alert. Needs `command_request_id` threaded onto
+   Tier-0 Ledger entries (currently only `submit_research_report`/
+   `get_research_report` carry it as a param, not a queryable column).
+3. **Guardrail redesign**: primary layer becomes explicit data-class
+   tagging set at the source (not content-sniffing); keyword matching
+   (`configs/litellm_guardrails.py`, built 2026-09-29) stays only as a
+   backup layer. False-positive rate to be measured against 20 sample
+   prompts and reported.
+4. **Paid-model tool-calling eval**: Mohit is adding $10 OpenRouter
+   credit (hard limit). A 10-task eval (correct tool use, no fabrication,
+   role-limit compliance - verified via the Ledger, never just the
+   model's own text) across 3 candidate cheap models, picking best pass-
+   rate per dollar. Free models stay for non-critical tasks only.
+5. **Re-run tests e, handoff-injection, and i - 3x each** for
+   repeatability, once 1-4 land, using whichever model the eval picks.
+6. **Report total real spend** once the above completes.
 
 ## Not yet started
 
-Squad Builder, Evals, Monitor & Self-Heal, Daily/Weekly reports, Web
-Dashboard, all 10 departments' actual tools/roles beyond the generic
-Gateway plugins, backup/restore scripts, Milestone 2 (Hermes Agent
-container) - explicitly not approved yet.
+Squad Builder, Evals, Monitor & Self-Heal, Daily/Weekly reports, all 10
+departments' actual tools/roles beyond the generic Gateway plugins.
