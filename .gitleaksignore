@@ -8,3 +8,11 @@ tests/unit/test_dashboard_app.py:generic-api-key:122
 tests/unit/test_dashboard_app.py:generic-api-key:129
 tests/unit/test_dashboard_app.py:generic-api-key:136
 tests/unit/test_dashboard_app.py:generic-api-key:139
+# Full-history scan (gitleaks detect --log-opts="--all"), 2026-09-29 - same
+# two false-positive test literals (fake DLP test key, DLP-test fixture
+# secret "correct-horse-battery-staple-9x2"), fingerprints include the
+# commit hash for a history scan instead of a staged/working-tree scan.
+34d10506300658f9b90564392d58191a3d84ec2e:tests/unit/test_core_execute.py:generic-api-key:156
+34d10506300658f9b90564392d58191a3d84ec2e:tests/unit/test_dlp.py:generic-api-key:23
+34d10506300658f9b90564392d58191a3d84ec2e:tests/unit/test_dlp.py:generic-api-key:29
+34d10506300658f9b90564392d58191a3d84ec2e:tests/unit/test_dlp.py:generic-api-key:45
