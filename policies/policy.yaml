@@ -136,9 +136,9 @@ budgets:
 # --- Approvals -----------------------------------------------------------------
 approvals:
   expire_after_hours: 24
-  # Confirmed the scheduler's real post-cooling auto-execution via a
-  # temporary 1-minute value (2026-09-29, approval 3bdfe0dd-...) - back to
-  # the real 10-minute cooling period.
+  # Confirmed the scheduler's real post-cooling auto-execution again via
+  # the dashboard e2e test C (2026-09-29, tests/e2e/test_acceptance.py) -
+  # back to the real 10-minute cooling period.
   tier3_cooling_period_minutes: 10
   # Actions approved this many times in a row with zero edits are reported to
   # the owner as auto-approve CANDIDATES - the policy is never changed

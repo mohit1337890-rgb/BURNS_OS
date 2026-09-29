@@ -3,15 +3,17 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from core import approvals, ledger, policy_engine, scheduler
+from core.approval_channels import TelegramChannel
 from gateway import plugins
 
+TELEGRAM_CHANNEL = TelegramChannel()
 
 REQUIRED_ENV = {
     "MAX_RISK_PER_TRADE_PCT": "1",
     "MAX_DAILY_LOSS_PCT": "3",
     "MONTHLY_AI_BUDGET_USD": "50",
     "DEFAULT_MISSION_BUDGET_USD": "10",
-    "TELEGRAM_OWNER_CHAT_ID": "123",  # matches decide_approval(..., owner_chat_id="123") below
+    "TELEGRAM_OWNER_CHAT_ID": "123",  # matches decide_approval(..., chat_id="123") below
 }
 
 
@@ -53,7 +55,7 @@ def _approved_tier3(session, policy):
         action="place_trade", params={"symbol": "EURUSD"}, input_summary="demo buy",
     )
     approvals.decide_approval(
-        session, outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
     return outcome.approval_id
 

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Alerts - Burns OS{% endblock %}
+{% block content %}
+<h2>Alerts</h2>
+<p class="muted">Hard-blocks, DLP refusals, UNKNOWN_OUTCOME reconciliations, budget stops, and reconciled failures.</p>
+{% if not alerts %}
+  <p class="muted">No alerts.</p>
+{% else %}
+<table>
+  <tr><th>Time</th><th>Action</th><th>Tier</th><th>Result</th></tr>
+  {% for a in alerts %}
+  <tr><td>{{ a.ts }}</td><td>{{ a.action }}</td><td>{{ a.tier }}</td><td>{{ a.result }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+{% endblock %}

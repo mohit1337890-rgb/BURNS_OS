@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Ledger - Burns OS{% endblock %}
+{% block content %}
+<h2>Ledger</h2>
+
+<form method="get" action="/ledger">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search action / summary / result">
+  <button type="submit" class="secondary">Search</button>
+</form>
+
+<form method="post" action="/ledger/verify">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button type="submit">Verify chain + anchor</button>
+</form>
+
+{% if verify_result %}
+<div class="card">
+  <div class="row">
+    <span class="pill {{ 'ok' if verify_result.chain.ok else 'bad' }}">Chain: {{ 'OK' if verify_result.chain.ok else verify_result.chain.reason }}</span>
+    <span class="pill {{ 'ok' if verify_result.anchor.ok else 'bad' }}">Anchor: {{ 'OK' if verify_result.anchor.ok else verify_result.anchor.reason }}</span>
+  </div>
+</div>
+{% endif %}
+
+<table>
+  <tr><th>ID</th><th>Time</th><th>Action</th><th>Tier</th><th>Result</th></tr>
+  {% for row in rows %}
+  <tr><td>{{ row.id }}</td><td>{{ row.ts }}</td><td>{{ row.action }}</td><td>{{ row.tier }}</td><td>{{ row.result[:150] }}</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

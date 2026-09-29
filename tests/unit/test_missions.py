@@ -1,7 +1,9 @@
 import pytest
 
 from core import approvals, ledger, missions, policy_engine
+from core.approval_channels import TelegramChannel
 
+TELEGRAM_CHANNEL = TelegramChannel()
 
 REQUIRED_ENV = {
     "MAX_RISK_PER_TRADE_PCT": "1",
@@ -49,7 +51,7 @@ def _approve_spec(session, mission):
     pressing Approve on Telegram) - calls the same core.approvals.decide_approval
     the real bot calls."""
     return approvals.decide_approval(
-        session, mission.spec_approval_id, decided_by="Mohit", owner_chat_id="owner-chat", approve=True,
+        session, mission.spec_approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="owner-chat",
     )
 
 
@@ -124,7 +126,7 @@ def test_cannot_start_running_without_a_real_owner_approval(session, policy):
 
     # Explicitly REJECTED - must still refuse.
     approvals.decide_approval(
-        session, m.spec_approval_id, decided_by="Mohit", owner_chat_id="owner-chat", approve=False,
+        session, m.spec_approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=False, chat_id="owner-chat",
     )
     with pytest.raises(missions.MissionError, match="not APPROVED"):
         missions.start_running(session, m)

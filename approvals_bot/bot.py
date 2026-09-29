@@ -28,8 +28,11 @@ from approvals_bot.formatting import (
     parse_callback_data,
 )
 from core import approvals
+from core.approval_channels import TelegramChannel
 from core.approvals import ApprovalRequest
 from gateway import core_execute
+
+_TELEGRAM_CHANNEL = TelegramChannel()
 
 _TELEGRAM_API_BASE = "https://api.telegram.org"
 _TIMEOUT_SECONDS = 15
@@ -117,8 +120,8 @@ def handle_callback_query(
 
     try:
         approvals.decide_approval(
-            session, approval_id, decided_by="Mohit", owner_chat_id=owner_chat_id,
-            approve=(decision == "approve"),
+            session, approval_id, decided_by="Mohit", channel=_TELEGRAM_CHANNEL,
+            approve=(decision == "approve"), chat_id=from_chat_id,
         )
     except approvals.ApprovalError as exc:
         client.answer_callback_query(callback_query_id, text=str(exc))

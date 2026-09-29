@@ -6,17 +6,21 @@ live testing is recorded here, not quietly fixed and forgotten.
 
 ## Current status
 
-- **231 passing pytest tests** (1 intentionally SQLite-only) against
-  SQLite (`tests/unit/`, no Docker required), with the DB-touching
-  majority of them now ALSO running against a real Postgres instance via
-  a parametrized `session` fixture (`tests/unit/conftest.py`) - see
-  "Item 6" below.
-- **11 dedicated live-Postgres-only tests** (`tests/postgres/`, `make
+- **320 passing pytest tests, 1 intentionally skipped** (SQLite-only)
+  against SQLite (`tests/unit/`, no Docker required), with the
+  DB-touching majority of them now ALSO running against a real Postgres
+  instance via a parametrized `session` fixture (`tests/unit/conftest.py`)
+  - see "Item 6" below. Confirmed live 2026-09-29 (`.venv/Scripts/python.exe
+  -m pytest tests/unit/ -q` -> `320 passed, 1 skipped in 273.35s`), after
+  the full Dashboard/channel-agnostic round (+89 tests: `core/
+  approval_channels.py`, `dashboard/auth.py`, `dashboard/app.py`).
+- **12 dedicated live-Postgres-only tests** (`tests/postgres/`, `make
   test-pg`) proving things SQLite structurally can't: the append-only
   trigger, a genuine two-thread concurrency race, the burns_app role's
-  restrictions, TRUNCATE being blocked, and (litellm_app's isolation +
-  burns_app's lack of DDL rights) the 2026-09-29 incident follow-up. 3 of
-  the 11 need admin (`burns_admin`)/`litellm_app` creds injected via `-e`
+  restrictions, TRUNCATE being blocked, litellm_app's isolation,
+  burns_app's lack of DDL rights, and (added 2026-09-29) burns_app being
+  refused a connection to the archived incident database. 3 of the 12
+  need admin (`burns_admin`)/`litellm_app` creds injected via `-e`
   (skip cleanly otherwise) - see each test's own docstring for the exact
   command.
 - **Docker Compose stack runs for real**: postgres, langfuse(+its own db),
@@ -322,6 +326,98 @@ existed) - that's the next step once Mohit confirms this approach.
 `gitleaks protect --staged` via Docker before every commit, refusing to
 commit if it finds a likely secret. Installed and active for this repo
 now.
+
+## Dashboard: Telegram postponed, Web Dashboard is now primary (2026-09-29)
+
+Mohit's decision: Telegram is postponed; the Web Dashboard becomes the
+primary approval/control channel, Telegram to be re-added later as a
+second one. Real, live-tested work, not a plan:
+
+- **`core/approval_channels.py`**: a new `ApprovalChannel` interface -
+  `TelegramChannel` (unchanged logic, just not currently wired into any
+  running process) and `DashboardChannel`. `core.approvals.decide_approval()`
+  was refactored to take a `channel` + `**credentials` instead of a bare
+  `owner_chat_id` string - it always calls `channel.authorize_decision()`
+  itself and never trusts a pre-computed "is this the owner" boolean from
+  the caller (the same principle that closed the owner-check bug from the
+  previous round). `DashboardChannel` requires a valid, non-expired
+  dashboard session for Tier 2, and ADDITIONALLY a fresh TOTP code
+  (verified right then, not from login time) for Tier 3.
+- **`dashboard/`** (new package): `auth.py` (argon2 password hashing,
+  TOTP 2FA enrollment/verification via `pyotp`+QR code, server-side
+  sessions with SHA-256-hashed-at-rest tokens, session-bound CSRF tokens,
+  login rate-limit/lockout, every login/approval/command logged to the
+  Ledger), `models.py` (`owner_account`/`dashboard_session`/
+  `command_request` - mutable app state, unlike the append-only Ledger -
+  migration `0007`), `app.py` (FastAPI + Jinja2/HTMX: Home, Approvals,
+  Alerts, Ledger [search + live verify button], Missions, Budgets,
+  Command box).
+- **Security posture, all live-tested**: binds `127.0.0.1` only
+  (`docker-compose.yml`'s `dashboard` service); Tailscale documented for
+  phone access (`docs/DASHBOARD.md`) - never a public port; CSRF on every
+  POST (missing -> FastAPI's own 422 for the empty-field case, forged ->
+  this module's own 403); `HttpOnly`/`SameSite=Strict`/`Secure`-by-default
+  cookies (`DASHBOARD_COOKIE_SECURE`); 30-minute sliding idle timeout;
+  5-failed-attempt lockout.
+- **STEP 3 acceptance tests B/C/D/E/F/G, redone via the Dashboard with a
+  real Chromium browser** (Playwright, `tests/e2e/test_acceptance.py`,
+  `make test-e2e`) - **11/11 passing**, screenshots in
+  `tests/e2e/evidence/` for every step (pending-approval card, reject,
+  approve, Tier-3-without-TOTP refusal, Tier-3-with-fresh-TOTP approval,
+  scheduler auto-executing the honest stub after cooling, hard-block/DLP
+  alerts visible on the Alerts page, double-click-approve executing
+  once, and all five of item E's rejection cases: unauthenticated,
+  wrong password, wrong TOTP, forged/missing CSRF, expired session).
+  This is a genuine, re-runnable regression suite against the live
+  system, not a one-time script - it caches the TOTP secret locally
+  (`tests/e2e/.totp_secret_cache`, gitignored - the real owner account's
+  secret is never retrievable again after enrollment, by design) so it
+  can be re-run against the same persistent deployment.
+- **229 -> 231+ unit tests, +14 for `core/approval_channels.py`, +21 for
+  `dashboard/auth.py`, +17 for `dashboard/app.py`** (TestClient-based,
+  same pattern as `test_gateway_app.py`) - see the final count at the top
+  of this file.
+
+## Item D follow-up: backups upgraded to asymmetric GPG (2026-09-29)
+
+The first backup implementation used a shared symmetric passphrase - a
+`.env` leak alone would have been enough to decrypt every past backup.
+**Closed**: `scripts/backup.py`/`scripts/restore.py` now use a real GPG
+keypair (`docs/BACKUP_RECOVERY.md` has the full procedure and live-test
+evidence) - this machine only ever holds the PUBLIC key
+(`deploy/keys/burns_os_backups_public.asc`, safe to commit); the PRIVATE
+key lives offline, handed to Mohit directly, imported only transiently
+during an actual recovery. Proved live: a decrypt attempt without the
+private key genuinely fails (`decryption failed: No secret key`);
+importing it from its offline export and re-running `scripts/restore.py`
+succeeds end to end (`RESTORE_VERIFY_CHAIN_OK=True`).
+
+Also closed: `burns_app`/`litellm_app` had residual `CONNECT`+table
+grants on the archived incident database (`burns_os_incident_20260929` -
+a renamed COPY of the pre-fix `burns_os`, carrying its old grants) -
+revoked; a live test now guards against this regression
+(`test_burns_app_cannot_connect_to_the_archived_incident_database`).
+
+**Still open**: `BACKUP_OFFSITE_DIR` is a second local folder, not
+actually offsite - real rclone-based offsite sync is pending Mohit
+choosing and configuring a remote (`docs/BACKUP_RECOVERY.md`'s own TODO
+section has the exact next steps). Neither `make backup` nor a nightly
+schedule is wired into `scripts/scheduler_loop.py` yet - a manual `make
+backup` today, a real cron once the offsite piece is decided.
+
+## Milestone 2 (Hermes): design updated, still explicitly not approved
+
+`docs/MILESTONE_2_HERMES_DESIGN.md` - design only, no code. Interface is
+now the Dashboard's Command box -> Hermes (not Telegram). Hermes's
+credential model is precisely two narrow, revocable tokens (an
+MCP-endpoint auth token distinct from `GATEWAY_INTERNAL_TOKEN`, and a
+budget-capped LiteLLM virtual key, not the master key) - explicitly not
+"zero" as a hand-wave, but zero REAL external-system credentials
+(no Telegram/SMTP/DB/trading/git access, direct or otherwise). The
+Gateway's MCP server needs a second transport (`streamable-http`, not
+just `stdio`) for a separate container to reach it - `gateway/mcp_server.py`'s
+`build_server()` already supports this, unused so far. Milestone 2 code
+still requires Mohit's explicit approval before any of this is built.
 
 ## Not yet started
 

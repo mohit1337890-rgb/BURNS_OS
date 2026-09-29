@@ -1,9 +1,6 @@
 # Burns OS Makefile.
-# up/down/test-pg/logs are WRITTEN, NOT YET RUN - this dev machine has no
-# Docker/WSL2 (see docs/KNOWN_LIMITS.md). `test` and `verify-ledger` work
-# today against SQLite with no Docker dependency.
 
-.PHONY: up down migrate test test-pg verify-ledger logs backup restore install-hooks
+.PHONY: up down migrate test test-pg test-e2e verify-ledger logs backup restore install-hooks
 
 up:
 	docker compose up -d --build
@@ -37,6 +34,13 @@ test:
 # otherwise fail to even import inside this container.
 test-pg:
 	docker compose exec gateway python -m pytest tests/postgres/ -v -m postgres
+
+# Live browser (Playwright) acceptance tests against the running
+# dashboard+gateway services - `make up` first. First run:
+# `.venv/Scripts/python.exe -m playwright install chromium`.
+# Screenshots land in tests/e2e/evidence/.
+test-e2e:
+	.venv/Scripts/python.exe -m pytest tests/e2e/ -v -s
 
 # Runs `core.ledger.verify_chain` + `core.ledger_anchor.verify_against_anchors`
 # against the real running ledger via the Gateway's own /ledger/verify

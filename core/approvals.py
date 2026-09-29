@@ -14,16 +14,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, Column, DateTime, Integer, String, update
 from sqlalchemy.orm import Session
 
 from core.ledger import Base
+
+if TYPE_CHECKING:
+    from core.approval_channels import ApprovalChannel
 
 
 def compute_params_hash(params: dict) -> str:
@@ -136,31 +139,30 @@ def get_approval(session: Session, approval_id: str, now: datetime | None = None
 
 
 def decide_approval(
-    session: Session, approval_id: str, *, decided_by: str, owner_chat_id: str, approve: bool,
-    now: datetime | None = None,
+    session: Session, approval_id: str, *, decided_by: str, channel: "ApprovalChannel", approve: bool,
+    now: datetime | None = None, **credentials: object,
 ) -> ApprovalRequest:
-    """decided_by/owner_chat_id are checked separately so a caller can't
-    accidentally decide on the owner's behalf just by passing a matching
-    name string - owner_chat_id must equal the configured
-    TELEGRAM_OWNER_CHAT_ID, checked by the caller (Approvals Bot) and
-    re-asserted here as a second, independent gate.
-
-    This second gate was previously a no-op - the parameter was accepted
-    but never compared against anything, so NotOwnerError could never
-    actually be raised from here (only approvals_bot.bot.handle_callback_query's
-    own from_chat_id check protected a decision, a single layer despite
-    this docstring's claim of two). Found and fixed 2026-09-29 during live
-    bring-up testing.
+    """Channel-agnostic since 2026-09-29 (Telegram postponed, the Web
+    Dashboard is now primary - core/approval_channels.py). `channel` is
+    always asked to independently authorize this SPECIFIC decision
+    (`channel.authorize_decision(session, req, **credentials)`) - core
+    never just trusts a pre-computed "is this the owner" boolean from the
+    caller, the same principle that closed a real bug found live
+    2026-09-29: this gate used to accept a bare `owner_chat_id` string
+    without ever comparing it to anything (NotOwnerError was defined but
+    never actually raised). `**credentials` is whatever the channel
+    itself needs (chat_id for Telegram; session_token + totp_code for the
+    Dashboard) - decide_approval() doesn't need to know what's inside.
     """
     now = now or datetime.now(timezone.utc)
-    configured_owner = os.environ.get("TELEGRAM_OWNER_CHAT_ID", "")
-    if not configured_owner or str(owner_chat_id) != configured_owner:
-        raise NotOwnerError(
-            f"owner_chat_id {owner_chat_id!r} does not match the configured TELEGRAM_OWNER_CHAT_ID - refusing to decide approval {approval_id}."
-        )
     req = get_approval(session, approval_id, now)
     if req is None:
         raise ApprovalError(f"No approval request with id {approval_id}.")
+
+    result = channel.authorize_decision(session, req, **credentials)
+    if not result.ok:
+        raise NotOwnerError(f"Channel {channel.name!r} refused to authorize deciding approval {approval_id}: {result.reason}")
+
     if req.status != ApprovalStatus.PENDING.value:
         raise ApprovalError(f"Approval {approval_id} is already {req.status}, cannot decide again.")
 

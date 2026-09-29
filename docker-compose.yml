@@ -229,6 +229,47 @@ services:
     healthcheck:
       disable: true
 
+  # The primary approval/control channel now (Telegram postponed - see
+  # core/approval_channels.py, docs/KNOWN_LIMITS.md). Bound to
+  # 127.0.0.1 ONLY - never expose this port publicly. For phone access,
+  # use Tailscale (docs/DASHBOARD.md) - never a public port/reverse proxy.
+  dashboard:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.dashboard
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-burns_os}
+      BURNS_APP_DB_USER: ${BURNS_APP_DB_USER:-burns_app}
+      BURNS_APP_DB_PASSWORD: ${BURNS_APP_DB_PASSWORD:?BURNS_APP_DB_PASSWORD must be set in .env}
+      LEDGER_ANCHOR_PATH: /data/ledger_anchor_v2_20260929.jsonl
+      TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:?TELEGRAM_OWNER_CHAT_ID must be set in .env}
+      MONTHLY_AI_BUDGET_USD: ${MONTHLY_AI_BUDGET_USD:?MONTHLY_AI_BUDGET_USD must be set in .env}
+      DEFAULT_MISSION_BUDGET_USD: ${DEFAULT_MISSION_BUDGET_USD:?DEFAULT_MISSION_BUDGET_USD must be set in .env}
+      MAX_RISK_PER_TRADE_PCT: ${MAX_RISK_PER_TRADE_PCT:?MAX_RISK_PER_TRADE_PCT must be set in .env}
+      MAX_DAILY_LOSS_PCT: ${MAX_DAILY_LOSS_PCT:?MAX_DAILY_LOSS_PCT must be set in .env}
+      # true by default (Secure cookies) - only ever false for plain-HTTP
+      # local testing (127.0.0.1 without a TLS terminator in front). See
+      # docs/DASHBOARD.md: real/phone access should go through Tailscale
+      # Serve's HTTPS, which keeps this true.
+      DASHBOARD_COOKIE_SECURE: ${DASHBOARD_COOKIE_SECURE:-true}
+    volumes:
+      - ledger_anchor_data:/data
+    ports:
+      - "127.0.0.1:8090:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/login')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
   langfuse_db_data:

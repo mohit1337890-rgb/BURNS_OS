@@ -6,3 +6,6 @@ __pycache__/
 data/
 *.jsonl
 backups/
+tests/e2e/.totp_secret_cache
+tests/e2e/evidence/
+.claude/

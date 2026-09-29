@@ -11,3 +11,8 @@ httpx
 requests
 python-dotenv
 mcp
+argon2-cffi
+pyotp
+qrcode[pil]
+jinja2
+python-multipart

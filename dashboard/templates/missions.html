@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Missions - Burns OS{% endblock %}
+{% block content %}
+<h2>Missions</h2>
+{% if not missions %}
+  <p class="muted">No missions yet.</p>
+{% else %}
+{% for m in missions %}
+  <div class="card">
+    <div class="row"><strong>{{ m.title }}</strong> <span class="pill">{{ m.status }}</span></div>
+    <p class="muted">budget: ${{ "%.2f"|format(m.budget_usd) }} &middot; updated {{ m.updated_at }}</p>
+    {% if m.failure_reason %}<p class="error">{{ m.failure_reason }}</p>{% endif %}
+  </div>
+{% endfor %}
+{% endif %}
+{% endblock %}

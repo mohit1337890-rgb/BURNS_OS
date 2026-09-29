@@ -8,9 +8,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from core import approvals, ledger, reconciliation
+from core.approval_channels import TelegramChannel
 from core.approvals import ApprovalStatus
 
 OWNER_CHAT_ID = "recon-owner"
+TELEGRAM_CHANNEL = TelegramChannel()
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +30,7 @@ def _approved_request(session, *, tier=2, cooling_minutes=0):
         params_summary="reconciliation test", params={"text": "hi"},
         expire_after_hours=24, cooling_minutes=cooling_minutes,
     )
-    approvals.decide_approval(session, req.id, decided_by="Mohit", owner_chat_id=OWNER_CHAT_ID, approve=True)
+    approvals.decide_approval(session, req.id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id=OWNER_CHAT_ID)
     return req
 
 
@@ -185,7 +187,7 @@ def test_real_process_kill_mid_plugin_call_leaves_a_recoverable_executing_marker
         session, mission_id=None, agent_role="chief-of-staff", action="send_message", tier=2,
         params_summary="kill test", params={"text": "hi"}, expire_after_hours=24, cooling_minutes=0,
     )
-    approvals.decide_approval(session, req.id, decided_by="Mohit", owner_chat_id=OWNER_CHAT_ID, approve=True)
+    approvals.decide_approval(session, req.id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id=OWNER_CHAT_ID)
     session.close()
 
     worker_script = textwrap.dedent(f"""

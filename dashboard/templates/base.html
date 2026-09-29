@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Burns OS{% endblock %}</title>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.12/dist/htmx.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #2a2e38; --text: #e6e8eb;
+    --muted: #8a8f9a; --accent: #4f8cff; --ok: #3ecf8e; --warn: #f5a623; --bad: #f25555;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { background: var(--panel); border-bottom: 1px solid var(--border); padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+  header .brand { font-weight: 700; }
+  nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  nav a { color: var(--muted); text-decoration: none; padding: 8px 10px; border-radius: 6px; font-size: 14px; }
+  nav a:hover, nav a.active { color: var(--text); background: #222633; }
+  main { padding: 16px; max-width: 900px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.ok { background: rgba(62,207,142,.15); color: var(--ok); }
+  .pill.warn { background: rgba(245,166,35,.15); color: var(--warn); }
+  .pill.bad { background: rgba(242,85,85,.15); color: var(--bad); }
+  .pill.tier2 { background: rgba(79,140,255,.15); color: var(--accent); }
+  .pill.tier3 { background: rgba(242,85,85,.15); color: var(--bad); }
+  input, button, textarea { font-size: 16px; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: #0b0d11; color: var(--text); }
+  input, textarea { width: 100%; margin-bottom: 10px; }
+  button { cursor: pointer; background: var(--accent); border: none; color: white; font-weight: 600; }
+  button.secondary { background: #2a2e38; }
+  button.danger { background: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .error { color: var(--bad); margin-bottom: 10px; }
+  .msg { background: #1c2130; border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 12px; }
+  form.inline { display: inline; }
+  @media (max-width: 600px) { header { flex-direction: column; align-items: flex-start; } nav { width: 100%; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">🔥 Burns OS</div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/approvals">Approvals</a>
+    <a href="/alerts">Alerts</a>
+    <a href="/ledger">Ledger</a>
+    <a href="/missions">Missions</a>
+    <a href="/budgets">Budgets</a>
+    <a href="/command">Command</a>
+    <form class="inline" method="post" action="/logout"><button type="submit" class="secondary">Logout</button></form>
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

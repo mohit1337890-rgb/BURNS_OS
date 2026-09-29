@@ -3,15 +3,17 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from core import approvals, ledger, policy_engine
+from core.approval_channels import TelegramChannel
 from gateway import core_execute, plugins
 
+TELEGRAM_CHANNEL = TelegramChannel()
 
 REQUIRED_ENV = {
     "MAX_RISK_PER_TRADE_PCT": "1",
     "MAX_DAILY_LOSS_PCT": "3",
     "MONTHLY_AI_BUDGET_USD": "50",
     "DEFAULT_MISSION_BUDGET_USD": "10",
-    "TELEGRAM_OWNER_CHAT_ID": "123",  # matches every decide_approval(..., owner_chat_id="123") call below
+    "TELEGRAM_OWNER_CHAT_ID": "123",  # matches every decide_approval(..., chat_id="123") call below
 }
 
 
@@ -113,7 +115,7 @@ def test_approved_tier2_action_executes_plugin_on_execute_approved_action(sessio
         action="send_message", params={"text": "hi"}, input_summary="notify owner",
     )
     approvals.decide_approval(
-        session, req_outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, req_outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
 
     exec_outcome = core_execute.execute_approved_action(session, req_outcome.approval_id)
@@ -133,7 +135,7 @@ def test_rejected_approval_never_executes_plugin(session, policy):
         action="send_message", params={"text": "hi"}, input_summary="notify owner",
     )
     approvals.decide_approval(
-        session, req_outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=False,
+        session, req_outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=False, chat_id="123",
     )
 
     exec_outcome = core_execute.execute_approved_action(session, req_outcome.approval_id)
@@ -158,7 +160,7 @@ def test_dlp_refuses_outgoing_content_with_a_hidden_api_key(session, policy):
         input_summary="follow-up email to client",
     )
     approvals.decide_approval(
-        session, outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
 
     exec_outcome = core_execute.execute_approved_action(session, outcome.approval_id)
@@ -183,7 +185,7 @@ def test_dlp_allows_clean_content_through(session, policy):
         input_summary="follow-up email to client",
     )
     approvals.decide_approval(
-        session, outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
     exec_outcome = core_execute.execute_approved_action(session, outcome.approval_id)
     assert exec_outcome.status == "executed"
@@ -203,7 +205,7 @@ def test_tier3_action_blocked_by_cooling_period_even_when_approved(session, poli
     assert req.cooling_until is not None
 
     approvals.decide_approval(
-        session, req_outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, req_outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
     # Cooling period (policy default 10 min) has NOT elapsed yet.
     exec_outcome = core_execute.execute_approved_action(session, req_outcome.approval_id)
@@ -224,7 +226,7 @@ def test_double_execute_approved_action_only_runs_plugin_once(session, policy):
         action="send_message", params={"text": "hi"}, input_summary="notify owner",
     )
     approvals.decide_approval(
-        session, req_outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, req_outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
 
     first = core_execute.execute_approved_action(session, req_outcome.approval_id)
@@ -262,7 +264,7 @@ def test_execution_exception_after_mark_executing_still_writes_a_ledger_entry(se
         action="send_message", params={"text": "hi"}, input_summary="notify owner",
     )
     approvals.decide_approval(
-        session, req_outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, req_outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
 
     outcome = core_execute.execute_approved_action(session, req_outcome.approval_id)
@@ -292,7 +294,7 @@ def test_mark_executing_atomic_claim_is_single_winner(session, policy):
         action="send_message", params={"text": "hi"}, input_summary="notify owner",
     )
     approvals.decide_approval(
-        session, req_outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, req_outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
 
     first_claim = approvals_module.mark_executing(session, req_outcome.approval_id)
@@ -315,7 +317,7 @@ def test_changed_params_after_approval_require_a_new_approval(session, policy):
         action="send_message", params={"text": "original approved text"}, input_summary="notify owner",
     )
     approvals.decide_approval(
-        session, req_outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, req_outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
 
     req = approvals.get_approval(session, req_outcome.approval_id)
@@ -339,7 +341,7 @@ def test_unchanged_params_execute_normally(session, policy):
         action="send_message", params={"text": "hi"}, input_summary="notify owner",
     )
     approvals.decide_approval(
-        session, req_outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, req_outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
     outcome = core_execute.execute_approved_action(session, req_outcome.approval_id)
     assert outcome.status == "executed"
@@ -378,7 +380,7 @@ def test_decide_approval_rejects_a_mismatched_owner_chat_id(session, policy):
     with pytest.raises(approvals.NotOwnerError):
         approvals.decide_approval(
             session, req_outcome.approval_id, decided_by="someone-else",
-            owner_chat_id="not-the-configured-owner", approve=True,
+            channel=TELEGRAM_CHANNEL, approve=True, chat_id="not-the-configured-owner",
         )
     # The approval must still be PENDING - a rejected decider must never
     # move it forward.
@@ -396,7 +398,7 @@ def test_tier3_action_executes_after_cooling_period_elapses(session, policy):
         action="place_trade", params={"symbol": "EURUSD"}, input_summary="demo buy",
     )
     approvals.decide_approval(
-        session, req_outcome.approval_id, decided_by="Mohit", owner_chat_id="123", approve=True,
+        session, req_outcome.approval_id, decided_by="Mohit", channel=TELEGRAM_CHANNEL, approve=True, chat_id="123",
     )
     req = approvals.get_approval(session, req_outcome.approval_id)
     # Simulate time passing by moving cooling_until into the past.

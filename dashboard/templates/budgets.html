@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Budgets - Burns OS{% endblock %}
+{% block content %}
+<h2>Budgets</h2>
+<div class="card">
+  <h3>Global monthly</h3>
+  <p>${{ "%.2f"|format(monthly.spend_usd) }} / ${{ "%.2f"|format(monthly.cap_usd) }} ({{ "%.0f"|format(monthly.pct_used) }}%)</p>
+  {% if monthly.stop %}<span class="pill bad">STOPPED</span>{% elif monthly.warn %}<span class="pill warn">WARNING</span>{% else %}<span class="pill ok">OK</span>{% endif %}
+</div>
+{% for mission_id, status in mission_budgets %}
+<div class="card">
+  <h3>{{ mission_id }}</h3>
+  <p>${{ "%.2f"|format(status.spend_usd) }} / ${{ "%.2f"|format(status.cap_usd) }} ({{ "%.0f"|format(status.pct_used) }}%)</p>
+  {% if status.stop %}<span class="pill bad">STOPPED</span>{% elif status.warn %}<span class="pill warn">WARNING</span>{% else %}<span class="pill ok">OK</span>{% endif %}
+</div>
+{% endfor %}
+{% endblock %}

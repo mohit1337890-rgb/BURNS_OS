@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Command - Burns OS{% endblock %}
+{% block content %}
+<h2>Command box</h2>
+<p class="muted">Until Milestone 2 (Hermes) is approved, this only creates a LOGGED request in the Ledger - it does not execute anything.</p>
+{% if message %}<div class="msg">{{ message }}</div>{% endif %}
+
+<form method="post" action="/command">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <textarea name="text" rows="3" placeholder="What would you like Burns OS to do?" required></textarea>
+  <button type="submit">Log request (does not execute)</button>
+</form>
+
+<h3>Recent requests</h3>
+{% if not recent %}
+  <p class="muted">None yet.</p>
+{% else %}
+{% for c in recent %}
+  <div class="card">
+    <p>{{ c.text }}</p>
+    <p class="muted">{{ c.created_at }} &middot; ledger entry #{{ c.ledger_entry_id }}</p>
+  </div>
+{% endfor %}
+{% endif %}
+{% endblock %}

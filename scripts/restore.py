@@ -8,11 +8,13 @@ just that pg_restore exited zero.
 Usage:
     python scripts/restore.py backups/burns_os_20260929_030000.dump.gpg [--target-db NAME]
 
-Requires: docker on PATH, gpg on PATH, POSTGRES_USER/PASSWORD (admin) and
-BACKUP_ENCRYPTION_PASSPHRASE in .env. Verifies the archive's SHA-256
-against its sidecar .sha256 file before doing anything else - a backup
-that's been tampered with (or just corrupted) must be refused, not
-silently restored.
+Requires: docker on PATH, gpg on PATH with the Burns OS Backups PRIVATE
+key already imported (docs/BACKUP_RECOVERY.md - that key is deliberately
+NOT on this machine day-to-day; import it from its offline storage first,
+then remove it again once done), and POSTGRES_USER/PASSWORD (admin) in
+.env. Verifies the archive's SHA-256 against its sidecar .sha256 file
+before doing anything else - a backup that's been tampered with (or just
+corrupted) must be refused, not silently restored.
 """
 
 from __future__ import annotations
@@ -54,15 +56,13 @@ def _verify_checksum(archive: Path) -> None:
     print(f"[restore] checksum verified ({actual[:16]}...).")
 
 
-def _gpg_decrypt(enc_path: Path, out_path: Path, passphrase: str) -> None:
-    subprocess.run(
-        [
-            "gpg", "--batch", "--yes", "--pinentry-mode", "loopback",
-            "--passphrase", passphrase,
-            "--decrypt", "-o", str(out_path), str(enc_path),
-        ],
-        check=True,
-    )
+def _gpg_decrypt(enc_path: Path, out_path: Path) -> None:
+    """No --passphrase - decryption uses whichever GPG secret key is
+    available in the local keyring. If the Burns OS Backups PRIVATE key
+    hasn't been imported (the normal state - see docs/BACKUP_RECOVERY.md),
+    this fails with a clear gpg error, which is the whole point: this
+    machine cannot decrypt backups on its own."""
+    subprocess.run(["gpg", "--batch", "--yes", "--decrypt", "-o", str(out_path), str(enc_path)], check=True)
 
 
 def main() -> int:
@@ -77,7 +77,7 @@ def main() -> int:
     _verify_checksum(args.archive)
 
     env = _load_env()
-    for required in ("POSTGRES_USER", "POSTGRES_PASSWORD", "BACKUP_ENCRYPTION_PASSPHRASE"):
+    for required in ("POSTGRES_USER", "POSTGRES_PASSWORD"):
         if not env.get(required):
             print(f"REFUSED: {required} not set in .env.", file=sys.stderr)
             return 1
@@ -89,7 +89,7 @@ def main() -> int:
         tmp_path = Path(tmp)
         plain_dump = tmp_path / "restore.dump"
         print(f"[restore] decrypting {args.archive.name} ...")
-        _gpg_decrypt(args.archive, plain_dump, env["BACKUP_ENCRYPTION_PASSPHRASE"])
+        _gpg_decrypt(args.archive, plain_dump)
 
         print(f"[restore] creating fresh database {target_db!r} (owned by {admin_user}) ...")
         subprocess.run(

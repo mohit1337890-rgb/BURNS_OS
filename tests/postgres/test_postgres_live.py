@@ -39,6 +39,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
 from core import app_config, approvals, ledger, policy_engine
+from core.approval_channels import TelegramChannel
 from gateway import core_execute, plugins
 
 pytestmark = pytest.mark.postgres
@@ -216,6 +217,32 @@ def test_burns_app_has_no_ddl_rights_on_burns_os(pg_session):
     assert "permission denied" in str(exc_info.value).lower()
 
 
+def test_burns_app_cannot_connect_to_the_archived_incident_database(pg_session):
+    """The corrupted live DB from docs/incidents/2026-09-litellm-table-drop.md
+    was archived by renaming it aside (burns_os_incident_20260929), not
+    dropped - but it was a renamed COPY of the old burns_os, so it still
+    carried burns_app's old CONNECT/table grants from before migration
+    0006 existed. Forensic evidence must not remain live-accessible to
+    the app's own runtime role. Revoked manually (2026-09-29); this is
+    the regression guard."""
+    row = pg_session.execute(text("SELECT 1 FROM pg_database WHERE datname = 'burns_os_incident_20260929'")).first()
+    if row is None:
+        pytest.skip("burns_os_incident_20260929 doesn't exist in this environment - nothing to check.")
+    # This test itself runs as burns_app (pg_session's own connection) -
+    # the real proof is that THIS role, connecting to the incident
+    # database directly, is refused.
+    incident_url = (
+        f"postgresql+psycopg2://{os.environ['BURNS_APP_DB_USER']}:{os.environ.get('BURNS_APP_DB_PASSWORD', '')}"
+        f"@{os.environ['POSTGRES_HOST']}:{os.environ['POSTGRES_PORT']}/burns_os_incident_20260929"
+    )
+    engine = ledger.get_engine(incident_url)
+    with pytest.raises(DBAPIError) as exc_info:
+        with engine.connect():
+            pass
+    engine.dispose()
+    assert "permission denied" in str(exc_info.value).lower()
+
+
 def test_litellm_app_cannot_connect_to_burns_os():
     """Closes a gap found live during the 2026-09-29 incident follow-up:
     moving litellm to its own database wasn't sufficient on its own -
@@ -316,13 +343,13 @@ def test_concurrent_execute_approved_action_runs_plugin_exactly_once(pg_engine, 
         tier=2, params_summary="concurrency test", params={"text": f"concurrency-{uuid.uuid4()}"},
         expire_after_hours=24, cooling_minutes=0,
     )
-    # Real configured value (core.approvals.decide_approval independently
-    # verifies owner_chat_id against os.environ["TELEGRAM_OWNER_CHAT_ID"] -
-    # see core/approvals.py) - not a hardcoded test double, since this runs
-    # against the real container env.
+    # Real configured value (TelegramChannel.authorize_decision independently
+    # verifies chat_id against os.environ["TELEGRAM_OWNER_CHAT_ID"] - see
+    # core/approval_channels.py) - not a hardcoded test double, since this
+    # runs against the real container env.
     approvals.decide_approval(
-        setup_session, req.id, decided_by="Mohit",
-        owner_chat_id=os.environ["TELEGRAM_OWNER_CHAT_ID"], approve=True,
+        setup_session, req.id, decided_by="Mohit", channel=TelegramChannel(),
+        approve=True, chat_id=os.environ["TELEGRAM_OWNER_CHAT_ID"],
     )
     setup_session.close()
 

@@ -1,17 +1,22 @@
 """
 Nightly backup: pg_dump of the live `burns_os` database + the ledger
-anchor file, both GPG-encrypted (symmetric, AES256), kept for
-BACKUP_RETENTION_DAYS (default 14), plus a copy in a second location
-(BACKUP_OFFSITE_DIR - see its own TODO in .env/.env.example: not actually
-offsite yet, Mohit still needs to pick a real destination).
+anchor file, both GPG-encrypted with the Burns OS Backups PUBLIC key
+(asymmetric - this script only ever needs the PUBLIC key, never the
+private one, so this machine having its backup process compromised does
+NOT also compromise the ability to decrypt past backups - see
+docs/BACKUP_RECOVERY.md for the private key's offline storage and the
+recovery procedure). Kept for BACKUP_RETENTION_DAYS (default 14), plus a
+copy in a second location (BACKUP_OFFSITE_DIR - see its own TODO in
+.env/.env.example: not actually offsite yet, Mohit still needs to pick a
+real destination).
 
 Runs on the HOST (not inside a container) - orchestrates via `docker
 compose exec`/`docker cp`, same pattern used manually during the
 2026-09-29 incident response (docs/incidents/2026-09-litellm-table-drop.md).
-Requires: docker on PATH, gpg on PATH, POSTGRES_USER/PASSWORD (admin) and
-BACKUP_ENCRYPTION_PASSPHRASE in the environment (.env - this script loads
-it itself via python-dotenv, doesn't require the caller to have exported
-it).
+Requires: docker on PATH, gpg on PATH with the Burns OS Backups public key
+already imported (docs/BACKUP_RECOVERY.md), POSTGRES_USER/PASSWORD (admin)
+and BACKUP_GPG_RECIPIENT in the environment (.env - this script loads it
+itself via python-dotenv, doesn't require the caller to have exported it).
 
 Usage: python scripts/backup.py   (or `make backup`)
 """
@@ -46,12 +51,16 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _gpg_encrypt(plain_path: Path, out_path: Path, passphrase: str) -> None:
+def _gpg_encrypt(plain_path: Path, out_path: Path, recipient: str) -> None:
+    """Encrypts to the Burns OS Backups PUBLIC key only - this process
+    never touches the private key (docs/BACKUP_RECOVERY.md). --trust-model
+    always: we're encrypting to our own dedicated backup key, not
+    verifying a third party's identity - the normal WoT trust prompt
+    would otherwise block unattended/automated runs."""
     subprocess.run(
         [
-            "gpg", "--batch", "--yes", "--pinentry-mode", "loopback",
-            "--passphrase", passphrase,
-            "--symmetric", "--cipher-algo", "AES256",
+            "gpg", "--batch", "--yes", "--trust-model", "always",
+            "--recipient", recipient, "--encrypt",
             "-o", str(out_path), str(plain_path),
         ],
         check=True,
@@ -104,14 +113,14 @@ def _prune_old_backups(retention_days: int) -> list[Path]:
 
 def main() -> int:
     env = _load_env()
-    for required in ("POSTGRES_USER", "POSTGRES_PASSWORD", "BACKUP_ENCRYPTION_PASSPHRASE"):
+    for required in ("POSTGRES_USER", "POSTGRES_PASSWORD", "BACKUP_GPG_RECIPIENT"):
         if not env.get(required):
             print(f"REFUSED: {required} not set in .env - cannot back up.", file=sys.stderr)
             return 1
 
     BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    passphrase = env["BACKUP_ENCRYPTION_PASSPHRASE"]
+    recipient = env["BACKUP_GPG_RECIPIENT"]
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -120,7 +129,7 @@ def main() -> int:
         dump_plain = tmp_path / "burns_os.dump"
         _dump_database(env, dump_plain)
         dump_enc = BACKUPS_DIR / f"burns_os_{stamp}.dump.gpg"
-        _gpg_encrypt(dump_plain, dump_enc, passphrase)
+        _gpg_encrypt(dump_plain, dump_enc, recipient)
         dump_sha = _sha256_file(dump_enc)
         (BACKUPS_DIR / f"burns_os_{stamp}.dump.gpg.sha256").write_text(f"{dump_sha}  {dump_enc.name}\n")
         print(f"[backup] wrote {dump_enc} ({dump_enc.stat().st_size} bytes, sha256={dump_sha[:16]}...)")
@@ -129,7 +138,7 @@ def main() -> int:
         anchor_plain = tmp_path / "ledger_anchor.jsonl"
         if _copy_anchor_file(env, anchor_plain) and anchor_plain.exists():
             anchor_enc = BACKUPS_DIR / f"burns_os_{stamp}_anchor.jsonl.gpg"
-            _gpg_encrypt(anchor_plain, anchor_enc, passphrase)
+            _gpg_encrypt(anchor_plain, anchor_enc, recipient)
             anchor_sha = _sha256_file(anchor_enc)
             (BACKUPS_DIR / f"burns_os_{stamp}_anchor.jsonl.gpg.sha256").write_text(f"{anchor_sha}  {anchor_enc.name}\n")
             print(f"[backup] wrote {anchor_enc} ({anchor_enc.stat().st_size} bytes, sha256={anchor_sha[:16]}...)")

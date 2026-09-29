@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Home - Burns OS{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>System health</h2>
+  <div class="row">
+    <span class="pill {{ 'ok' if chain_ok else 'bad' }}">Ledger chain: {{ 'OK' if chain_ok else 'BROKEN' }}</span>
+    <span class="pill {{ 'ok' if anchor_ok else 'bad' }}">Anchor: {{ 'OK' if anchor_ok else 'FAILED' }}</span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Pending approvals ({{ pending_count }})</h2>
+  {% if not pending %}
+    <p class="muted">Nothing pending.</p>
+  {% else %}
+    {% for req in pending %}
+      <div class="row"><strong>{{ req.action }}</strong> <span class="pill tier{{ req.tier }}">Tier {{ req.tier }}</span> <span class="muted">{{ req.params_summary }}</span></div>
+    {% endfor %}
+    <p><a href="/approvals">View all approvals →</a></p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Monthly spend</h2>
+  <p>${{ "%.2f"|format(monthly.spend_usd) }} / ${{ "%.2f"|format(monthly.cap_usd) }} ({{ "%.0f"|format(monthly.pct_used) }}%)</p>
+  {% if monthly.stop %}<span class="pill bad">STOPPED</span>{% elif monthly.warn %}<span class="pill warn">WARNING</span>{% else %}<span class="pill ok">OK</span>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Recent alerts</h2>
+  {% if not alerts %}
+    <p class="muted">No alerts.</p>
+  {% else %}
+    {% for a in alerts %}
+      <div class="row"><span class="muted">{{ a.ts }}</span> {{ a.result[:120] }}</div>
+    {% endfor %}
+    <p><a href="/alerts">View all alerts →</a></p>
+  {% endif %}
+</div>
+{% endblock %}
