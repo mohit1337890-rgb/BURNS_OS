@@ -179,3 +179,23 @@ plugins:
 git_push_allowed_roots: []
 
 default_tier_for_unknown_action: 3
+
+# --- Per-agent-role limits (Milestone 2: Hermes chief-of-staff/researcher
+# lethal-trifecta split - docs/MILESTONE_2_HERMES_DESIGN.md section 4).
+# An agent_role NOT listed here is unrestricted - every pre-Milestone-2
+# caller (Dashboard, scheduler, approvals_bot, and every ad-hoc agent_role
+# string already used in tests) is unaffected. Only these two role names
+# are ever resolved from a verified Gateway MCP bearer token
+# (gateway/mcp_auth.py) - never from a caller-supplied request param.
+roles:
+  researcher:
+    # Tier-0 only (web_search/web_fetch/read_file/etc.) - can never reach
+    # a Tier-2/3 action, no matter what it asks for by name.
+    max_tier: 0
+    forbidden_actions: []
+  chief_of_staff:
+    # Can request up to Tier 3 (the human approval/cooling-period gate is
+    # unchanged) but must never read raw web content directly - it only
+    # ever sees the researcher's summary via submit_research_report.
+    max_tier: 3
+    forbidden_actions: [web_search, web_fetch]

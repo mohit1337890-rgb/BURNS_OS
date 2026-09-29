@@ -44,6 +44,24 @@ class HardBlockedError(Exception):
         super().__init__(f"Action '{action}' is hard-blocked and can never be executed.")
 
 
+class RoleNotAllowedError(Exception):
+    """Raised by check_role_limit() when a role listed in policy.yaml's
+    `roles:` section requests an action its role forbids, or above its
+    max_tier. This is the Milestone 2 lethal-trifecta enforcement
+    (docs/MILESTONE_2_HERMES_DESIGN.md) - a researcher-role MCP token can
+    never reach a Tier-2/3 action, and a chief_of_staff-role token can
+    never call web_search/web_fetch directly, no matter what the caller's
+    own request params claim. An agent_role NOT listed in `roles:` is
+    unrestricted (backward compatible with every pre-Milestone-2 caller -
+    Dashboard, scheduler, approvals_bot - which never had a role name tied
+    to a Gateway-issued bearer token in the first place)."""
+
+    def __init__(self, agent_role: str, action: str, reason: str):
+        self.agent_role = agent_role
+        self.action = action
+        super().__init__(f"Role {agent_role!r} may not call '{action}': {reason}")
+
+
 @dataclass(frozen=True)
 class ActionRule:
     action: str
@@ -58,6 +76,13 @@ class PluginRequirement:
     name: str
     enabled: bool
     required_env: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class RoleLimit:
+    role: str
+    max_tier: int
+    forbidden_actions: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)
@@ -77,6 +102,7 @@ class PolicyDocument:
     suggest_auto_approve_after_streak: int
     scope_file: Path
     git_push_allowed_roots: tuple[str, ...]
+    roles: dict[str, RoleLimit]
 
 
 def _substitute_env(raw_text: str) -> str:
@@ -156,6 +182,16 @@ def load_policy(path: Path | None = None) -> PolicyDocument:
             f"unrecognized action must never default to something more permissive. Got {default_tier}."
         )
 
+    roles: dict[str, RoleLimit] = {}
+    for name, spec in (doc.get("roles") or {}).items():
+        if "max_tier" not in spec:
+            raise PolicyError(f"Role '{name}' in policy.yaml's roles: section has no 'max_tier'.")
+        roles[name] = RoleLimit(
+            role=name,
+            max_tier=int(spec["max_tier"]),
+            forbidden_actions=frozenset(spec.get("forbidden_actions", []) or []),
+        )
+
     trading = doc.get("trading") or {}
     budgets = doc.get("budgets") or {}
     approvals = doc.get("approvals") or {}
@@ -179,6 +215,7 @@ def load_policy(path: Path | None = None) -> PolicyDocument:
         if security.get("scope_file")
         else DEFAULT_SCOPES_PATH,
         git_push_allowed_roots=tuple(doc.get("git_push_allowed_roots") or []),
+        roles=roles,
     )
 
 
@@ -204,6 +241,33 @@ def classify(policy: PolicyDocument, action: str) -> Verdict:
     if rule is None:
         return Verdict(action=action, tier=policy.default_tier_for_unknown_action, rule=None, is_unknown_action=True)
     return Verdict(action=action, tier=rule.tier, rule=rule, is_unknown_action=False)
+
+
+def check_role_limit(policy: PolicyDocument, agent_role: str, verdict: Verdict) -> None:
+    """Raises RoleNotAllowedError if `agent_role` is listed in policy.yaml's
+    `roles:` section and this action violates its limit. Called by
+    gateway.core_execute.request_action() right after classify() succeeds
+    (hard-block already excluded) and before the budget check - a
+    role-forbidden action is refused for the same reason a hard-block is:
+    an authorization decision, not a spend decision.
+
+    An agent_role with no entry in policy.roles is unrestricted - this
+    keeps every pre-Milestone-2 caller (Dashboard, scheduler,
+    approvals_bot, and every existing test's ad-hoc agent_role string)
+    working exactly as before. Only the two Milestone 2 Hermes roles
+    (researcher, chief_of_staff), which a Gateway MCP bearer token can
+    actually resolve to, are ever listed here.
+    """
+    limit = policy.roles.get(agent_role)
+    if limit is None:
+        return
+    if verdict.action in limit.forbidden_actions:
+        raise RoleNotAllowedError(agent_role, verdict.action, f"'{verdict.action}' is on role {agent_role!r}'s forbidden_actions list.")
+    if verdict.tier > limit.max_tier:
+        raise RoleNotAllowedError(
+            agent_role, verdict.action,
+            f"Tier {verdict.tier} exceeds role {agent_role!r}'s max_tier ({limit.max_tier}).",
+        )
 
 
 def load_authorised_scopes(path: Path | None = None) -> list[dict]:

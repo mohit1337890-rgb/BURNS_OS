@@ -11,6 +11,7 @@ httpx
 requests
 python-dotenv
 mcp
+starlette
 argon2-cffi
 pyotp
 qrcode[pil]

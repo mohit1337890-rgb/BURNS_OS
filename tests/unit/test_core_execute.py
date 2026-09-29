@@ -80,6 +80,41 @@ def test_tier2_action_creates_pending_approval_and_does_not_execute(session, pol
     assert req.tier == 2
 
 
+def test_researcher_role_refused_for_a_tier2_action(session, policy):
+    """Milestone 2 lethal-trifecta enforcement (docs/MILESTONE_2_HERMES_DESIGN.md):
+    the researcher role can never request a Tier-2/3 action, checked here
+    through the real request_action() chokepoint, not just policy_engine
+    in isolation."""
+    fake = _FakePlugin()
+    plugins.register("send_email", fake)
+    outcome = core_execute.request_action(
+        session, policy, agent_role="researcher", mission_id="m1",
+        action="send_email", params={"to": "x@example.com"}, input_summary="a researcher trying to send email",
+    )
+    assert outcome.status == "refused_role_not_allowed"
+    assert fake.calls == []
+    entry = session.get(ledger.LedgerEntry, outcome.ledger_entry_id)
+    assert "REFUSED_ROLE_NOT_ALLOWED" in entry.result
+
+
+def test_chief_of_staff_role_refused_for_web_search(session, policy):
+    outcome = core_execute.request_action(
+        session, policy, agent_role="chief_of_staff", mission_id="m1",
+        action="web_search", params={}, input_summary="chief trying to read the web directly",
+    )
+    assert outcome.status == "refused_role_not_allowed"
+    entry = session.get(ledger.LedgerEntry, outcome.ledger_entry_id)
+    assert "REFUSED_ROLE_NOT_ALLOWED" in entry.result
+
+
+def test_researcher_role_still_executes_tier0_actions(session, policy):
+    outcome = core_execute.request_action(
+        session, policy, agent_role="researcher", mission_id="m1",
+        action="web_fetch", params={"url": "https://example.com"}, input_summary="research",
+    )
+    assert outcome.status == "executed"
+
+
 def test_hard_blocked_action_refuses_and_is_logged(session, policy):
     outcome = core_execute.request_action(
         session, policy, agent_role="anyone", mission_id="m1",

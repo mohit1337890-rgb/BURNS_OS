@@ -229,6 +229,46 @@ services:
     healthcheck:
       disable: true
 
+  # Milestone 2: the Gateway's MCP tools (execute_action/get_approval_status/
+  # verify_ledger) over streamable-http, for the Hermes containers - see
+  # docs/MILESTONE_2_HERMES_DESIGN.md. Deliberately NOT in `ports:` - only
+  # reachable from other containers on this compose network by hostname
+  # (`gateway-mcp:8091`), never from the host or internet. Reuses the
+  # gateway image (no separate build), same pattern as `scheduler`.
+  gateway-mcp:
+    image: burns_os_system-gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-burns_os}
+      BURNS_APP_DB_USER: ${BURNS_APP_DB_USER:-burns_app}
+      BURNS_APP_DB_PASSWORD: ${BURNS_APP_DB_PASSWORD:?BURNS_APP_DB_PASSWORD must be set in .env}
+      LEDGER_ANCHOR_PATH: /data/ledger_anchor_v2_20260929.jsonl
+      TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:?TELEGRAM_OWNER_CHAT_ID must be set in .env}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      MONTHLY_AI_BUDGET_USD: ${MONTHLY_AI_BUDGET_USD:?MONTHLY_AI_BUDGET_USD must be set in .env}
+      DEFAULT_MISSION_BUDGET_USD: ${DEFAULT_MISSION_BUDGET_USD:?DEFAULT_MISSION_BUDGET_USD must be set in .env}
+      MAX_RISK_PER_TRADE_PCT: ${MAX_RISK_PER_TRADE_PCT:?MAX_RISK_PER_TRADE_PCT must be set in .env}
+      MAX_DAILY_LOSS_PCT: ${MAX_DAILY_LOSS_PCT:?MAX_DAILY_LOSS_PCT must be set in .env}
+      MCP_TRANSPORT: streamable-http
+      MCP_HTTP_PORT: 8091
+      HERMES_MCP_TOKEN_CHIEF: ${HERMES_MCP_TOKEN_CHIEF:?HERMES_MCP_TOKEN_CHIEF must be set in .env}
+      HERMES_MCP_TOKEN_RESEARCHER: ${HERMES_MCP_TOKEN_RESEARCHER:?HERMES_MCP_TOKEN_RESEARCHER must be set in .env}
+    volumes:
+      - ledger_anchor_data:/data
+    command: ["python", "-m", "gateway.mcp_server"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "gateway.healthcheck_mcp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # The primary approval/control channel now (Telegram postponed - see
   # core/approval_channels.py, docs/KNOWN_LIMITS.md). Bound to
   # 127.0.0.1 ONLY - never expose this port publicly. For phone access,

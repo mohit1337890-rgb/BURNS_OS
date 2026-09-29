@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from core import ledger, policy_engine
-from gateway import mcp_server, plugins
+from gateway import mcp_auth, mcp_server, plugins
 
 REQUIRED_ENV = {
     "MAX_RISK_PER_TRADE_PCT": "1",
@@ -104,6 +104,49 @@ async def test_verify_ledger_tool_on_fresh_db(server):
     body = mcp_server._tool_result_to_dict(result)
     assert body["chain_ok"] is True
     assert body["anchor_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_execute_action_uses_contextvar_role_over_params_role(server):
+    """Milestone 2: simulates what HermesBearerAuthMiddleware does for a
+    real authenticated streamable-http request (sets the contextvar before
+    the tool runs) - the tool call's own 'agent_role': 'chief_of_staff'
+    param must be IGNORED in favor of the token-derived role. Here the
+    contextvar says 'researcher' while params claims 'chief_of_staff' -
+    the actual enforced role must be researcher (refused for send_message,
+    a Tier-2 action), proving the params value never wins once a token
+    has authenticated the request."""
+    plugins.register("send_message", _FakePlugin())
+    token = mcp_auth._current_agent_role.set("researcher")
+    try:
+        result = await server.call_tool("execute_action", {
+            "agent_role": "chief_of_staff", "action": "send_message",
+            "input_summary": "a hijack attempt via params", "params": {"text": "hi"},
+        })
+    finally:
+        mcp_auth._current_agent_role.reset(token)
+    body = mcp_server._tool_result_to_dict(result)
+    assert body["status"] == "refused_role_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_execute_action_falls_back_to_params_role_when_no_contextvar(server):
+    """The stdio transport (no middleware ever wraps it) never sets the
+    contextvar - execute_action must still work exactly as it did before
+    Milestone 2, using the caller-supplied agent_role param."""
+    assert mcp_auth.get_current_agent_role() is None  # nothing set this test run
+    result = await server.call_tool("execute_action", {
+        "agent_role": "researcher", "action": "web_search", "input_summary": "test",
+    })
+    body = mcp_server._tool_result_to_dict(result)
+    assert body["status"] == "executed"
+
+
+@pytest.mark.asyncio
+async def test_execute_action_refuses_when_no_role_available_at_all(server):
+    result = await server.call_tool("execute_action", {"action": "web_search", "input_summary": "test"})
+    body = mcp_server._tool_result_to_dict(result)
+    assert body["status"] == "refused"
 
 
 @pytest.mark.asyncio

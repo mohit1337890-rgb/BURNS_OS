@@ -21,10 +21,11 @@ import json
 import os
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy.orm import sessionmaker
 
 from core import app_config, approvals, ledger, ledger_anchor, policy_engine
-from gateway import core_execute
+from gateway import core_execute, mcp_auth
 
 
 def build_server(session_factory: sessionmaker, policy: policy_engine.PolicyDocument, anchor_sinks: list | None = None) -> MCPServer:
@@ -40,11 +41,23 @@ def build_server(session_factory: sessionmaker, policy: policy_engine.PolicyDocu
     )
 
     @server.tool(description="Request an action be taken. Tier 0/1 executes immediately (logged); Tier 2/3 creates a pending approval and does NOT execute yet.")
-    def execute_action(agent_role: str, action: str, input_summary: str, mission_id: str | None = None, params: dict | None = None) -> dict:
+    def execute_action(action: str, input_summary: str, agent_role: str | None = None, mission_id: str | None = None, params: dict | None = None) -> dict:
+        # Milestone 2: over the authenticated streamable-http transport,
+        # HermesBearerAuthMiddleware has already set this contextvar from
+        # WHICH bearer token authenticated the request - that always wins
+        # over whatever this call's own JSON params claim agent_role is
+        # (never trust the caller for its own identity). On the stdio
+        # transport (no middleware wraps it - see main() below), the
+        # contextvar is never set, so this falls back to the caller-
+        # supplied value exactly as every pre-Milestone-2 stdio caller
+        # already relied on (process-spawn trust, unchanged).
+        resolved_role = mcp_auth.get_current_agent_role() or agent_role
+        if not resolved_role:
+            return {"status": "refused", "detail": "agent_role is required (missing from both the authenticated token and the call's own params)."}
         session = session_factory()
         try:
             outcome = core_execute.request_action(
-                session, policy, agent_role=agent_role, mission_id=mission_id,
+                session, policy, agent_role=resolved_role, mission_id=mission_id,
                 action=action, params=params or {}, input_summary=input_summary,
             )
             return {
@@ -88,6 +101,29 @@ def build_server(session_factory: sessionmaker, policy: policy_engine.PolicyDocu
     return server
 
 
+def build_streamable_http_app(session_factory: sessionmaker, policy: policy_engine.PolicyDocument, anchor_sinks: list | None = None):
+    """Milestone 2: the SAME build_server() output as stdio, over
+    streamable-http, wrapped in HermesBearerAuthMiddleware so every
+    request must present a valid HERMES_MCP_TOKEN_CHIEF/_RESEARCHER
+    bearer token before it ever reaches a tool - a request with no/wrong
+    token gets a 401 from the middleware and never runs execute_action at
+    all (see gateway/mcp_auth.py's own docstring for why this is a plain
+    header check, not the MCP SDK's OAuth-resource-server framework)."""
+    server = build_server(session_factory, policy, anchor_sinks=anchor_sinks)
+    tokens_by_value = mcp_auth.load_hermes_tokens_from_env()
+    port = os.environ.get("MCP_HTTP_PORT", "8091")
+    # DNS-rebinding protection (the SDK's own, on by default) checks the
+    # Host header against an allowlist - the default only covers
+    # 127.0.0.1/localhost, which doesn't include this service's real
+    # docker-compose hostname. Explicit, not disabled - callers still must
+    # present one of these exact Host values.
+    security = TransportSecuritySettings(
+        allowed_hosts=[f"gateway-mcp:{port}", "gateway-mcp", f"localhost:{port}", f"127.0.0.1:{port}"],
+    )
+    inner_app = server.streamable_http_app(transport_security=security)
+    return mcp_auth.HermesBearerAuthMiddleware(inner_app, tokens_by_value)
+
+
 def _tool_result_to_dict(result) -> dict:
     """Test/debug helper: MCP's CallToolResult wraps content blocks (text,
     possibly structured) - this unwraps the common case (our tools all
@@ -107,12 +143,17 @@ def _tool_result_to_dict(result) -> dict:
 
 def main() -> None:
     """Real entry point (`python -m gateway.mcp_server`) - wires the same
-    real-env config gateway/app.py's lifespan uses, then runs the server
-    over stdio (MCPServer.run()'s default transport). stdio means the trust
-    boundary is "whoever can spawn this process" (a future Hermes container
-    launching it as a subprocess) rather than a network port - so unlike
-    gateway/app.py's HTTP /execute, there is no separate API-key check here
-    by design; nothing else listens on a socket.
+    real-env config gateway/app.py's lifespan uses.
+
+    Two transports, chosen by MCP_TRANSPORT (default "stdio"):
+      - stdio: MCPServer.run()'s default. Trust boundary is "whoever can
+        spawn this process" - no separate API-key check by design; nothing
+        else listens on a socket. Used by tests spawning this as a real
+        subprocess.
+      - streamable-http: Milestone 2's Gateway-MCP service (docker-compose
+        `gateway-mcp`) - HermesBearerAuthMiddleware-wrapped, listens on
+        MCP_HTTP_PORT (default 8091), NOT published to the host (internal
+        Docker network only - see docs/MILESTONE_2_HERMES_DESIGN.md).
     """
     core_config = app_config.load_core_config()
     engine = ledger.get_engine(core_config.database_url)
@@ -123,8 +164,18 @@ def main() -> None:
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
         sinks.append(ledger_anchor.TelegramAnchorSink())
 
-    server = build_server(session_factory, policy, anchor_sinks=sinks)
-    server.run()
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "streamable-http":
+        import uvicorn
+
+        app = build_streamable_http_app(session_factory, policy, anchor_sinks=sinks)
+        port = int(os.environ.get("MCP_HTTP_PORT", "8091"))
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    elif transport == "stdio":
+        server = build_server(session_factory, policy, anchor_sinks=sinks)
+        server.run()
+    else:
+        raise ValueError(f"Unknown MCP_TRANSPORT {transport!r} - must be 'stdio' or 'streamable-http'.")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,10 @@ unit-testable - gateway/app.py is a thin HTTP wrapper around this module.
 Flow for every call:
   1. classify tier (policy_engine.classify) - hard-blocked actions refuse
      immediately and are still logged (result=REFUSED_HARD_BLOCK).
+  1.5. check per-agent-role limit (policy_engine.check_role_limit) - a
+     no-op unless agent_role is listed in policy.yaml's roles: section
+     (Milestone 2's Hermes chief_of_staff/researcher split); a violation
+     refuses immediately, also logged (result=REFUSED_ROLE_NOT_ALLOWED).
   2. check budget (budget_guard.enforce) - over-budget refuses immediately,
      also logged (result=REFUSED_BUDGET).
   3. Tier 0/1: these are in-sandbox/read-only actions the agent runtime
@@ -31,7 +35,7 @@ from gateway import plugins
 
 @dataclass(frozen=True)
 class ActionOutcome:
-    status: str  # "executed" | "pending_approval" | "refused_hard_block" | "refused_budget"
+    status: str  # "executed" | "pending_approval" | "refused_hard_block" | "refused_budget" | "refused_role_not_allowed"
     detail: str
     ledger_entry_id: Optional[int] = None
     approval_id: Optional[str] = None
@@ -59,6 +63,21 @@ def request_action(
             ),
         )
         return ActionOutcome(status="refused_hard_block", detail=str(exc), ledger_entry_id=entry.id)
+
+    # Step 1.5: per-agent-role limit (Milestone 2 - docs/MILESTONE_2_HERMES_DESIGN.md).
+    # A no-op for any agent_role not listed in policy.yaml's roles: section -
+    # every pre-Milestone-2 caller is unaffected.
+    try:
+        policy_engine.check_role_limit(policy, agent_role, verdict)
+    except policy_engine.RoleNotAllowedError as exc:
+        entry = ledger.append_entry(
+            session,
+            ledger.LedgerEntryInput(
+                mission_id=mission_id, agent_role=agent_role, action=action, tier=verdict.tier,
+                input_summary=input_summary, tool=action, result=f"REFUSED_ROLE_NOT_ALLOWED: {exc}",
+            ),
+        )
+        return ActionOutcome(status="refused_role_not_allowed", detail=str(exc), ledger_entry_id=entry.id)
 
     # Step 2: budget check (even Tier 0/1 actions consume LLM tokens).
     try:

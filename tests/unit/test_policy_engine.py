@@ -118,6 +118,45 @@ def test_authorised_scope_empty_by_default(env, tmp_path):
     assert policy_engine.is_target_authorised("anything.example.com", path=scopes_file) is False
 
 
+def test_researcher_role_is_capped_at_tier0(env):
+    policy = policy_engine.load_policy()
+    verdict = policy_engine.classify(policy, "web_search")  # tier 0
+    policy_engine.check_role_limit(policy, "researcher", verdict)  # must not raise
+
+
+def test_researcher_role_refused_above_tier0(env):
+    policy = policy_engine.load_policy()
+    verdict = policy_engine.classify(policy, "send_email")  # tier 2
+    with pytest.raises(policy_engine.RoleNotAllowedError, match="researcher"):
+        policy_engine.check_role_limit(policy, "researcher", verdict)
+
+
+def test_chief_of_staff_role_forbidden_from_web_tools(env):
+    policy = policy_engine.load_policy()
+    for action in ("web_search", "web_fetch"):
+        verdict = policy_engine.classify(policy, action)
+        with pytest.raises(policy_engine.RoleNotAllowedError, match="forbidden_actions"):
+            policy_engine.check_role_limit(policy, "chief_of_staff", verdict)
+
+
+def test_chief_of_staff_role_allowed_up_to_tier3(env):
+    policy = policy_engine.load_policy()
+    verdict = policy_engine.classify(policy, "place_trade")  # tier 3
+    policy_engine.check_role_limit(policy, "chief_of_staff", verdict)  # must not raise
+
+
+def test_unlisted_agent_role_is_unrestricted(env):
+    """Backward compatibility: every pre-Milestone-2 caller (Dashboard,
+    scheduler, approvals_bot, and every ad-hoc agent_role string already
+    used elsewhere in this test suite) has no entry in policy.roles and
+    must be completely unaffected by this check."""
+    policy = policy_engine.load_policy()
+    for action in ("place_trade", "web_search", "send_email"):
+        verdict = policy_engine.classify(policy, action)
+        policy_engine.check_role_limit(policy, "sales-researcher", verdict)  # must not raise
+        policy_engine.check_role_limit(policy, "owner", verdict)  # must not raise
+
+
 def test_authorised_scope_true_only_when_owner_confirmed(env, tmp_path):
     scopes_file = tmp_path / "authorised_scopes.yaml"
     scopes_file.write_text(
