@@ -6,14 +6,15 @@ live testing is recorded here, not quietly fixed and forgotten.
 
 ## Current status
 
-- **320 passing pytest tests, 1 intentionally skipped** (SQLite-only)
+- **328 passing pytest tests, 1 intentionally skipped** (SQLite-only)
   against SQLite (`tests/unit/`, no Docker required), with the
   DB-touching majority of them now ALSO running against a real Postgres
   instance via a parametrized `session` fixture (`tests/unit/conftest.py`)
   - see "Item 6" below. Confirmed live 2026-09-29 (`.venv/Scripts/python.exe
-  -m pytest tests/unit/ -q` -> `320 passed, 1 skipped in 273.35s`), after
+  -m pytest tests/unit/ -q` -> `328 passed, 1 skipped in 271.17s`), after
   the full Dashboard/channel-agnostic round (+89 tests: `core/
-  approval_channels.py`, `dashboard/auth.py`, `dashboard/app.py`).
+  approval_channels.py`, `dashboard/auth.py`, `dashboard/app.py`) plus the
+  password-rotation follow-up (+8 tests: `dashboard/auth.py::rotate_owner_password`).
 - **12 dedicated live-Postgres-only tests** (`tests/postgres/`, `make
   test-pg`) proving things SQLite structurally can't: the append-only
   trigger, a genuine two-thread concurrency race, the burns_app role's
@@ -404,6 +405,53 @@ choosing and configuring a remote (`docs/BACKUP_RECOVERY.md`'s own TODO
 section has the exact next steps). Neither `make backup` nor a nightly
 schedule is wired into `scripts/scheduler_loop.py` yet - a manual `make
 backup` today, a real cron once the offsite piece is decided.
+
+## Post-round security follow-up (2026-09-29, after the gitleaks catch)
+
+Mohit's follow-up after the dashboard round's gitleaks catch (a real
+hardcoded password in a test file, moved to `.env` before it was
+committed - see the Dashboard section above):
+
+- **Full git history scan** (`gitleaks detect --log-opts="--all"`, all 3
+  commits, not just the working tree/staged diff) - confirmed **no real
+  secret has ever been committed**. 4 additional hits, all the same two
+  disposable test literals already allowlisted for the working-tree scan,
+  just with commit-scoped fingerprints - added to `.gitleaksignore`. No
+  `git filter-repo` history rewrite was needed.
+- **Password rotation**: `dashboard/auth.py::rotate_owner_password()` +
+  `scripts/admin_change_owner_password.py` - requires the current
+  password, invalidates every existing dashboard session, logs to the
+  Ledger, leaves TOTP untouched. See `docs/DASHBOARD.md`.
+- **GPG private key handover** - full-machine sweep found and deleted one
+  stray leftover copy of the passphrase file (no private key material)
+  from an earlier failed key-generation attempt at a too-long path;
+  confirmed no copy in the Recycle Bin, the default GPG keyring, or any
+  WSL distro. A dress rehearsal (fresh GNUPGHOME, key re-imported from a
+  plain-text copy - including a deliberately CRLF-mangled one, simulating
+  the realistic Windows-clipboard corruption risk) proved
+  `RESTORE_VERIFY_CHAIN_OK=True` end to end. The real private key still
+  needs Mohit to actually complete the Bitwarden Secure Note + USB
+  handover (exact steps in `docs/BACKUP_RECOVERY.md`) - not deleted from
+  this machine yet, deliberately, until that's confirmed done.
+- **Gateway MCP streamable-http transport, checked against the installed
+  SDK, not assumed**: `MCPServer.run_streamable_http_async()` has NO
+  built-in caller authentication - confirmed by reading the SDK's own
+  source. Nothing runs this transport anywhere today (`gateway/
+  mcp_server.py::main()` is hardcoded to stdio, no docker-compose service
+  exposes an MCP HTTP port), so there is no live gap right now - but
+  `docs/MILESTONE_2_HERMES_DESIGN.md` now states as a hard, blocking
+  requirement (not an open question) that the `HERMES_MCP_TOKEN` auth
+  middleware must ship in the SAME change that first turns this transport
+  on, not as a follow-up.
+- **Dashboard Secure-cookie behavior on `http://127.0.0.1`, live-tested**
+  in real Chromium and Firefox (Playwright): the session cookie comes
+  back `Secure=True HttpOnly=True SameSite=Strict` and is genuinely sent
+  back on the next request, even over plain HTTP - loopback addresses are
+  a "potentially trustworthy origin" per spec, exempt from the HTTPS
+  requirement. This corrected a wrong claim in the previous round's
+  `docs/DASHBOARD.md` (which had said Secure cookies "aren't sent over
+  plain HTTP" and recommended disabling the flag for localhost-only
+  access) - `DASHBOARD_COOKIE_SECURE` should just stay `true` always.
 
 ## Milestone 2 (Hermes): design updated, still explicitly not approved
 

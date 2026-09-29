@@ -9,6 +9,7 @@ COPY core/ ./core/
 COPY gateway/ ./gateway/
 COPY dashboard/ ./dashboard/
 COPY policies/ ./policies/
+COPY scripts/ ./scripts/
 
 EXPOSE 8090
 

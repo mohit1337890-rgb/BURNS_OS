@@ -84,6 +84,22 @@ def change_password(session: Session, owner: OwnerAccount, new_password: str) ->
     session.commit()
 
 
+def rotate_owner_password(session: Session, owner: OwnerAccount, new_password: str, now: datetime | None = None) -> int:
+    """Used by scripts/admin_change_owner_password.py. Unlike bare
+    change_password(), this also invalidates every existing dashboard
+    session (a stale session cookie from before the rotation should not
+    keep working - the same reasoning a "log out everywhere" button
+    would have) and logs the rotation to the Ledger. Does NOT touch
+    totp_secret - password and TOTP are independent, so rotating one
+    never requires re-enrolling the other."""
+    now = now or datetime.now(timezone.utc)
+    change_password(session, owner, new_password)
+    invalidated = session.query(DashboardSession).delete()
+    session.commit()
+    _log_ledger(session, action="dashboard_owner_password_rotated", result=f"OK: password rotated, {invalidated} session(s) invalidated", now=now)
+    return invalidated
+
+
 # --- TOTP (2FA) -----------------------------------------------------------------
 
 def start_totp_enrollment(owner: OwnerAccount) -> tuple[str, bytes]:

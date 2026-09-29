@@ -41,9 +41,20 @@ feature) for this - that defeats the entire point. `tailscale serve`
 
 If you genuinely only ever access the Dashboard from this same machine
 (no phone access), Tailscale isn't needed at all - `http://127.0.0.1:8090`
-directly works, but then `DASHBOARD_COOKIE_SECURE` should be set to
-`false` in `.env` (Secure cookies aren't sent over plain HTTP) - the
-tradeoff is documented in `.env`'s own comment on that variable.
+directly works, and `DASHBOARD_COOKIE_SECURE` can stay `true`. **Live-
+tested 2026-09-29** (Playwright, real Chromium and Firefox, against the
+actual running dashboard): the session cookie comes back with
+`Secure=True HttpOnly=True SameSite=Strict` over plain
+`http://127.0.0.1`, and is genuinely sent back on the next request (not
+silently withheld) - loopback addresses (`127.0.0.1`, `localhost`) are
+specced as "potentially trustworthy origins" and both engines treat a
+Secure cookie as valid there even without TLS. (This is a browser-engine
+behavior, not something Burns OS's own code does - Edge, being
+Chromium-based, behaves the same as the Chromium result above. Not
+tested against Safari/WebKit, which historically has been stricter about
+this; not a concern on Windows.) `DASHBOARD_COOKIE_SECURE=false` should
+only ever be needed if you put something other than a loopback address
+in front of this without TLS - not a normal setup.
 
 ## First-time setup
 
@@ -89,6 +100,25 @@ clear `owner_account.totp_secret` to force re-enrollment.
 | Missions | Every `core.missions.Mission` row and its status |
 | Budgets | Global monthly + per-mission spend vs. cap |
 | Command | Until Milestone 2 (Hermes) is approved, only creates a LOGGED request in the Ledger - never executes anything. See `docs/MILESTONE_2_HERMES_DESIGN.md` for what changes once it is. |
+
+## Rotating the password (you know the current one)
+
+`scripts/admin_change_owner_password.py` (added 2026-09-29): prompts for
+the current password (must match), then the new one twice, and refuses
+anything under 12 characters. On success it invalidates every existing
+dashboard session (forces a fresh login everywhere, including any other
+device you were logged in on) and logs the rotation to the Ledger. It
+does **not** touch TOTP - password and TOTP are independent secrets, so
+this never requires re-enrolling 2FA.
+
+```powershell
+docker exec -it burns_os_system-dashboard-1 python -m scripts.admin_change_owner_password
+```
+
+(`-it` matters - this prompts interactively via `getpass`, never accepts
+the password as a command-line argument, so it never ends up in shell
+history.) Log in again afterward with the new password and your existing
+authenticator app code.
 
 ## Resetting the owner account (dev/test only)
 

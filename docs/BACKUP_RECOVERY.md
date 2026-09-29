@@ -35,9 +35,69 @@ temporarily, during an actual recovery.
   second secret, also only in that same offline location) - losing
   either one makes past backups unrecoverable.
 
-**Action needed from Mohit**: move the private key export to real offline
-storage now, if you haven't already - it is currently only wherever this
-session handed it to you.
+**Action needed from Mohit** - the private key still only exists at
+`C:\gpgburns\burns_os_backups_private_OFFLINE_ONLY.asc` on this machine
+(plus its passphrase, in plaintext, in `C:\gpgburns\keygen.batch`). Move
+both into real offline storage:
+
+1. **Bitwarden Secure Note** (recommended primary copy):
+   - In PowerShell, copy the armored key straight to your clipboard
+     without ever printing it to screen:
+     ```powershell
+     Get-Content C:\gpgburns\burns_os_backups_private_OFFLINE_ONLY.asc -Raw | Set-Clipboard
+     ```
+   - In Bitwarden: New item -> Secure Note -> name it e.g. "Burns OS - GPG
+     Backup Private Key (OFFLINE)" -> paste (Ctrl+V) into the note body -> Save.
+   - Copy the passphrase the same way (never re-type it from memory - a
+     transcription error here makes the key permanently useless):
+     ```powershell
+     (Get-Content C:\gpgburns\keygen.batch | Select-String "^Passphrase:").ToString().Split(":",2)[1].Trim() | Set-Clipboard
+     ```
+   - Add it to the same Secure Note as a second field (Bitwarden's "Add
+     Field" -> Hidden type), clearly labeled, or a second Secure Note -
+     either way, keep it findable next to the key, not separately lost.
+
+2. **USB copy** (secondary/offline-offline copy): plug in a USB drive
+   ideally protected with BitLocker To Go, then:
+   ```powershell
+   Copy-Item C:\gpgburns\burns_os_backups_private_OFFLINE_ONLY.asc E:\burns_os_backups\
+   Copy-Item C:\gpgburns\keygen.batch E:\burns_os_backups\   # has the passphrase
+   ```
+   (adjust `E:\` to your drive letter). Eject safely, store it physically
+   separate from this machine.
+
+3. **Verify the ROUND TRIP actually works** (not just that the original
+   file on disk works - a copy-paste through a note-taking app is a real
+   place text can get mangled): open the Bitwarden note again, copy the
+   body back out to a fresh file, e.g. `C:\gpgburns\verify_from_bitwarden.asc`,
+   then:
+   ```powershell
+   $env:GNUPGHOME = "C:\gpg_verify_bitwarden"
+   New-Item -ItemType Directory -Force $env:GNUPGHOME | Out-Null
+   gpg --batch --yes --import C:\gpgburns\verify_from_bitwarden.asc
+   ```
+   Tell me once you've done this and I'll run the same restore-test
+   procedure below against that exact file and report the result, then
+   clean up `$env:GNUPGHOME` and the verify file.
+
+4. **Only once both copies exist and the round-trip verifies**, tell me
+   and I'll delete `C:\gpgburns\burns_os_backups_private_OFFLINE_ONLY.asc`
+   and `C:\gpgburns\keygen.batch` from this machine (there is no other
+   copy anywhere else on this machine - confirmed 2026-09-29, see
+   "Evidence" below) and confirm the deletion.
+
+**Dress rehearsal already done (2026-09-29), proving the mechanism itself
+is sound**: simulated "a fresh copy of the note text" two ways - a
+byte-identical copy, and a CRLF-line-ending-mangled copy (the realistic
+Windows-clipboard/note-app corruption risk) - imported each into a
+brand-new, never-before-used GNUPGHOME, and ran the real, unmodified
+`scripts/restore.py` against a live backup using the CRLF-safe import.
+Result: **`RESTORE_VERIFY_CHAIN_OK=True entries=103`** - a full, real
+recovery using a key that had been copied as plain text, not the
+original file. This does not replace step 3 above (it doesn't touch your
+actual Bitwarden vault), but it does confirm GPG's ASCII-armor format is
+robust to the specific corruption a copy-paste through a plain-text note
+field could realistically introduce.
 
 ## Day-to-day: this machine only ever needs the public key
 
@@ -148,3 +208,21 @@ backup story.
   just a non-zero exit code.
 - Removed the private key from the local keyring again afterward and
   confirmed it's gone (`gpg --list-secret-keys` -> "No secret key").
+- **2026-09-29, full-machine sweep for stray copies**: searched the whole
+  user profile for any other copy of the private key or its passphrase
+  file. Found and deleted one stray leftover `keygen.batch` (same
+  plaintext passphrase, no private key material) in an earlier scratch
+  directory from the first key-generation attempt that failed on a too-
+  long path. Checked the Windows Recycle Bin (327 items) for either
+  filename - no matches. Checked the default GPG keyring
+  (`gpgconf --list-dirs homedir` -> `C:\Users\91813\.gnupg`) -
+  `gpg --list-secret-keys` there is empty, confirming the day-to-day
+  keyring never held the private key. Only `wsl -l -v` distro is Docker
+  Desktop's own internal VM (never used to run gpg directly) - no WSL
+  copy exists. **The only remaining copy on this machine right now is
+  `C:\gpgburns\burns_os_backups_private_OFFLINE_ONLY.asc` +
+  `C:\gpgburns\keygen.batch`**, pending the Bitwarden/USB handover above.
+- **2026-09-29, dress rehearsal**: `RESTORE_VERIFY_CHAIN_OK=True
+  entries=103` using a key re-imported from a plain-text copy (including
+  a deliberately CRLF-mangled one) in a brand-new GNUPGHOME - see the
+  "Action needed from Mohit" section above for the full test description.

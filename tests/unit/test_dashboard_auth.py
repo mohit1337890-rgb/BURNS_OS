@@ -41,6 +41,41 @@ def test_bootstrap_owner_account_refuses_a_second_time(session):
         auth.bootstrap_owner_account(session, username="someone-else", password="x")
 
 
+# --- password rotation (scripts/admin_change_owner_password.py) ---------------------
+
+def test_rotate_owner_password_changes_the_password(session):
+    owner = auth.bootstrap_owner_account(session, username="mohit", password="old-password-123")
+    auth.rotate_owner_password(session, owner, "new-password-456")
+    assert auth.verify_password("new-password-456", owner.password_hash) is True
+    assert auth.verify_password("old-password-123", owner.password_hash) is False
+
+
+def test_rotate_owner_password_leaves_totp_untouched(session):
+    owner = auth.bootstrap_owner_account(session, username="mohit", password="old-password-123")
+    secret, _ = auth.start_totp_enrollment(owner)
+    auth.confirm_totp_enrollment(session, owner, secret, pyotp.TOTP(secret).now())
+    auth.rotate_owner_password(session, owner, "new-password-456")
+    assert owner.totp_secret == secret
+
+
+def test_rotate_owner_password_invalidates_every_existing_session(session):
+    owner = auth.bootstrap_owner_account(session, username="mohit", password="old-password-123")
+    token_a, _ = auth.create_session(session)
+    token_b, _ = auth.create_session(session)
+    auth.rotate_owner_password(session, owner, "new-password-456")
+    assert auth.get_valid_session(session, token_a) is None
+    assert auth.get_valid_session(session, token_b) is None
+
+
+def test_rotate_owner_password_is_logged_to_the_ledger(session):
+    from core import ledger as ledger_module
+
+    owner = auth.bootstrap_owner_account(session, username="mohit", password="old-password-123")
+    auth.rotate_owner_password(session, owner, "new-password-456")
+    row = session.query(ledger_module.LedgerEntry).filter_by(action="dashboard_owner_password_rotated").one()
+    assert "OK" in row.result
+
+
 # --- TOTP ---------------------------------------------------------------------------
 
 def test_totp_enrollment_requires_a_valid_code_to_confirm(session):

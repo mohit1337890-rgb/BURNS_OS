@@ -9,9 +9,13 @@ no SPA build step. Security posture (all explicitly required, 2026-09-29):
 - Tier-3 approvals require a FRESH TOTP code at decision time, not just a
   valid session (core/approval_channels.py::DashboardChannel).
 - CSRF token (session-bound synchronizer pattern) required on every POST.
-- Session cookie: HttpOnly, SameSite=Strict, Secure by default
-  (DASHBOARD_COOKIE_SECURE=false only for plain-http-on-127.0.0.1 local
-  testing - see .env's comment on that var).
+- Session cookie: HttpOnly, SameSite=Strict, Secure by default - and
+  Secure genuinely works over plain http://127.0.0.1 too (live-tested in
+  real Chromium+Firefox 2026-09-29 - loopback is a "potentially
+  trustworthy origin", exempt from the HTTPS requirement; see
+  docs/DASHBOARD.md). DASHBOARD_COOKIE_SECURE=false is only for a
+  non-loopback plain-HTTP setup, which isn't the recommended way to run
+  this.
 - 30-minute idle timeout (dashboard.auth.SESSION_IDLE_TIMEOUT_MINUTES),
   login rate-limit + lockout (dashboard.auth.MAX_FAILED_LOGINS).
 - Every login (success/fail), approval decision, and command-box entry is

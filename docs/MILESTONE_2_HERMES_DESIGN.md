@@ -123,6 +123,26 @@ process-spawn trust. This keeps `gateway/app.py`'s existing HTTP REST API
 (`/execute` etc., `GATEWAY_INTERNAL_TOKEN`-authenticated) completely
 separate and unchanged - Hermes never touches it.
 
+**Hard requirement, checked live 2026-09-29 against the installed `mcp`
+SDK, not assumed**: `MCPServer.run_streamable_http_async()` has **no
+built-in caller authentication at all** - it just serves a plain Starlette
+app over uvicorn (`transport_security` only covers Host-header/DNS-
+rebinding protection, not "who is calling"). Today, nothing invokes this
+code path anywhere - `gateway/mcp_server.py::main()` always runs `stdio`
+(hardcoded, no transport argument even exists yet), and no
+docker-compose service exposes an MCP HTTP port, so there is no live gap
+right now. But this means **the `HERMES_MCP_TOKEN` check cannot be an
+afterthought** - whoever implements this must wrap the ASGI app
+`streamable_http_app()` returns with an authentication middleware (reject
+any request missing/mismatching `HERMES_MCP_TOKEN` before it reaches any
+tool) as part of the SAME change that first turns this transport on, not
+a follow-up. A first version of this endpoint that omits that check would
+be a real, exploitable hole (any container reachable on that internal
+Docker network could call `execute_action` with no credential at all),
+not a theoretical one - this document treats it as a blocking
+requirement for Milestone 2's implementation, not one of the open
+questions below.
+
 ## Command box -> Hermes flow
 
 1. Owner types a command in the Dashboard (`POST /command`, already

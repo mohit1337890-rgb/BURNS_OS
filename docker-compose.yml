@@ -255,10 +255,11 @@ services:
       DEFAULT_MISSION_BUDGET_USD: ${DEFAULT_MISSION_BUDGET_USD:?DEFAULT_MISSION_BUDGET_USD must be set in .env}
       MAX_RISK_PER_TRADE_PCT: ${MAX_RISK_PER_TRADE_PCT:?MAX_RISK_PER_TRADE_PCT must be set in .env}
       MAX_DAILY_LOSS_PCT: ${MAX_DAILY_LOSS_PCT:?MAX_DAILY_LOSS_PCT must be set in .env}
-      # true by default (Secure cookies) - only ever false for plain-HTTP
-      # local testing (127.0.0.1 without a TLS terminator in front). See
-      # docs/DASHBOARD.md: real/phone access should go through Tailscale
-      # Serve's HTTPS, which keeps this true.
+      # true by default (Secure cookies) - live-tested 2026-09-29 to work
+      # fine over plain http://127.0.0.1 too (loopback is a "potentially
+      # trustworthy origin", exempt from the HTTPS requirement - see
+      # docs/DASHBOARD.md). Only ever needs to be false if something other
+      # than a loopback address sits in front of this without TLS.
       DASHBOARD_COOKIE_SECURE: ${DASHBOARD_COOKIE_SECURE:-true}
     volumes:
       - ledger_anchor_data:/data

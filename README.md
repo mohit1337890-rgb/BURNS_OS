@@ -23,7 +23,7 @@ Tier-2/3 acceptance test that used to go through the Telegram bot has been
 re-run live through the Dashboard with a real Chromium browser
 (Playwright, `make test-e2e`, screenshots in `tests/e2e/evidence/`).
 
-**320 passing pytest tests, 1 intentionally skipped** plus **11
+**328 passing pytest tests, 1 intentionally skipped** plus **11
 Playwright end-to-end tests** against the live Dashboard+Gateway, the
 DB-touching majority of the unit tests running against BOTH SQLite
 (`python -m pytest tests/unit/ -v`, no Docker required) AND a real
