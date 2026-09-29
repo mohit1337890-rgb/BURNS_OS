@@ -82,10 +82,20 @@ Kept enabled (no network, no host access, and useful):
 
 | Toolset | Why it stays |
 |---|---|
-| `memory` | Persistent context across turns - pure local SQLite, no network/host |
-| `session_search` | Local FTS5 retrieval - same |
+| `session_search` | Local FTS5 retrieval - no network/host |
 | `clarify` | Lets Hermes ask the owner a structured question instead of guessing - no network/host |
-| `skills` | See section 5 - kept, but gated |
+
+**`memory` and `skills` are BOTH disabled for M2** (updated after Mohit's
+follow-up review, approval condition 3 - memory poisoning): a persistent-
+memory toolset, despite having no network/host access itself, is exactly
+the kind of place a prompt-injection payload (from a fetched page, or
+from the researcher's own report) could plant itself to survive past a
+single turn - the researcher reads attacker-influenceable content
+directly, and the chief only ever receives the researcher's UNTRUSTED-
+wrapped report, so both share the same risk. Disabling it outright is the
+simpler, strictly-safer of the two options Mohit offered ("disabled...
+or wipe it after every task") - same reasoning `skills` was already
+disabled for. See `deploy/hermes/{researcher,chief}/config.yaml.template`.
 
 **The disable mechanism** (confirmed exact syntax from the project's own
 `configuration.md`):

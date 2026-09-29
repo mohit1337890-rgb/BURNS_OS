@@ -5,8 +5,17 @@
 agent:
   # Every toolset that reaches the network or the host directly - see
   # docs/MILESTONE_2_HERMES_DESIGN.md section 1's table for why each one
-  # is listed. Only MCP tools (registered below) + memory/session_search/
-  # clarify survive this list.
+  # is listed. Only MCP tools (registered below) + session_search/clarify
+  # survive this list.
+  #
+  # `memory` disabled too (Mohit's approval condition 3, memory
+  # poisoning): the researcher is the one agent that reads
+  # attacker-influenceable content (fetched pages) - persistent memory
+  # would be a place a prompt-injection payload could plant itself to
+  # survive past a single turn/session, poisoning every future research
+  # task. No persistent memory at all is the simpler, strictly-safer of
+  # the two options Mohit offered ("disabled... or wipe it after every
+  # task") - same reasoning as `skills` being disabled entirely.
   disabled_toolsets:
     - terminal
     - file
@@ -33,12 +42,28 @@ agent:
     - delegation
     - kanban
     - skills
+    - memory
 
 model:
   provider: custom
   base_url: http://litellm:4000/v1
   default: cheap
   key_env: LITELLM_VIRTUAL_KEY_RESEARCHER
+
+# Found live 2026-09-29: Hermes auto-detects several free-model families
+# (including the ones this project's litellm routes point at) as
+# reasoning-capable and sends a `reasoning_effort` param that this
+# LiteLLM version (v1.55.0) cannot forward to OpenRouter
+# ("AsyncCompletions.create() got an unexpected keyword argument
+# 'reasoning_effort'", confirmed even with drop_params: true set in
+# configs/litellm_config.yaml). Forced off per-model here rather than
+# left to auto-detection - see docs/evidence/milestone2_acceptance_tests_e_f_g_i.md.
+model_overrides:
+  custom:
+    cheap:
+      supports_reasoning: false
+    premium:
+      supports_reasoning: false
 
 mcp_servers:
   burns_gateway:

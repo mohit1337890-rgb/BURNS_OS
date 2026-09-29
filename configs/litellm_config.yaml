@@ -3,30 +3,48 @@
 # (sensitive data)"). Model names/pricing drift over time - re-verify
 # against https://docs.litellm.ai/docs/providers before relying on this.
 #
-# 2026-09-29: switched to OpenRouter + NVIDIA NIM (the two providers Mohit
-# actually has keys for) instead of a direct Anthropic key, which was
-# never configured. See .env.example for OPENROUTER_API_KEY/
-# NVIDIA_NIM_API_KEY.
+# 2026-09-29: switched to OpenRouter (Mohit's own key) instead of a direct
+# Anthropic key, which was never configured. NVIDIA_NIM_API_KEY is still
+# configured and used elsewhere (kept in .env.example for whenever a NIM
+# model this account actually has access to is identified - NVIDIA NIM's
+# public /v1/models catalog listing a model does NOT mean every
+# individual key can call it, confirmed live 2026-09-29 with a real
+# HTTP 404 "Function not found for account" - a real, useful finding
+# either provider's own docs won't tell you).
 #
-# Both routes deliberately point at genuinely $0 models (Mohit's explicit
-# request, to avoid surprise billing during Milestone 2 testing) -
-# premium's model ID confirmed live against OpenRouter's own
-# /api/v1/models endpoint (pricing.prompt == "0"), not assumed from a
-# blog post - free-model rosters shift constantly, re-verify the same
-# way before trusting an older note. cheap's NVIDIA NIM model is on
-# NVIDIA's own free developer tier (build.nvidia.com), not billed
-# per-token for moderate individual use.
+# Both routes deliberately point at genuinely $0 OpenRouter models
+# (Mohit's explicit request, to avoid surprise billing during Milestone 2
+# testing) - confirmed live against OpenRouter's own /api/v1/models
+# endpoint (pricing.prompt == "0"), not assumed from a blog post - free-
+# model rosters shift constantly, re-verify the same way before trusting
+# an older note. Both confirmed with a REAL completion call, 2026-09-29.
 
 model_list:
   - model_name: premium
     litellm_params:
       model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
       api_key: os.environ/OPENROUTER_API_KEY
+    model_info:
+      data_class: public_only
 
   - model_name: cheap
     litellm_params:
-      model: nvidia_nim/meta/llama-3.1-8b-instruct
+      # Long history of dead ends for this route (meta/llama-3.1-8b-
+      # instruct EOL'd; nvidia/llama-3.1-nemotron-51b-instruct 404s for
+      # this account; nvidia/nemotron-3.5-lightning:free on OpenRouter
+      # hangs indefinitely with no error) - see git history for the full
+      # trail. Landed on a NVIDIA NIM model confirmed working with a real
+      # completion call directly against NVIDIA's own API, 2026-09-29 -
+      # and critically, NIM is a SEPARATE quota from OpenRouter (whose
+      # free-models-per-day limit - 50/day - this project's own testing
+      # exhausted the same day; NIM has no such daily cap for this
+      # account, confirmed by continued successful calls after
+      # OpenRouter's 429). Splitting the two routes across two different
+      # providers is also just more robust against either one's outage.
+      model: nvidia_nim/meta/llama-3.2-11b-vision-instruct
       api_key: os.environ/NVIDIA_NIM_API_KEY
+    model_info:
+      data_class: public_only
 
   - model_name: local
     litellm_params:
@@ -39,6 +57,21 @@ model_list:
 litellm_settings:
   drop_params: true
   set_verbose: false
+  # Free-tier routes get rate-limited under real load (hit live 2026-09-29:
+  # a real 429 from openrouter/qwen/qwen3.8-27b:free, "temporarily
+  # rate-limited upstream") - LiteLLM's own retry-with-backoff is the
+  # first line of defense, before Hermes's own agent-level retry (already
+  # observed live: "Retrying API call in Xs (attempt N/3)") ever needs to
+  # kick in. Mohit's approval condition 4.
+  num_retries: 3
+  request_timeout: 60
+  # Free-model data-safety (Mohit's approval condition 4) -
+  # litellm_guardrails.py refuses any premium/cheap request whose content
+  # matches a sensitive-data pattern (client/trading-strategy/confidential/
+  # proprietary/private) before it ever leaves this proxy - a code-level
+  # block, not a prompt instruction. Mounted into the container alongside
+  # this file - see docker-compose.yml's litellm service.
+  callbacks: ["litellm_guardrails.public_only_route_guardrail"]
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

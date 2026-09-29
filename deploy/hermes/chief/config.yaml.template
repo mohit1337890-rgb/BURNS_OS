@@ -3,6 +3,16 @@
 # scripts/generate_hermes_config.py - never commit the rendered file.
 
 agent:
+  # `memory` disabled here too (Mohit's approval condition 3: "Chief
+  # memory must never store raw fetched web content"). chief_of_staff
+  # cannot call web_fetch/web_search itself (role_limits,
+  # policies/policy.yaml) - the only raw-content path into chief at all
+  # is get_research_report's UNTRUSTED-wrapped text, which the researcher
+  # itself writes. Rather than trust a system prompt to never copy that
+  # into memory (this project's own design rule: permissions enforced in
+  # code, not prompts), memory is disabled outright - the same strict,
+  # code-level guarantee applied to `skills` and to the researcher's own
+  # memory. Revisit only once a real sanitized-memory design exists.
   disabled_toolsets:
     - terminal
     - file
@@ -29,6 +39,7 @@ agent:
     - delegation
     - kanban
     - skills
+    - memory
 
 model:
   provider: custom
@@ -39,6 +50,15 @@ model:
   # a cost one.
   default: premium
   key_env: LITELLM_VIRTUAL_KEY_CHIEF
+
+# See researcher's config.yaml.template for why this exists - same fix,
+# both models.
+model_overrides:
+  custom:
+    cheap:
+      supports_reasoning: false
+    premium:
+      supports_reasoning: false
 
 mcp_servers:
   burns_gateway:

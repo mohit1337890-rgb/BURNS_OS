@@ -112,6 +112,7 @@ services:
       NVIDIA_NIM_API_KEY: ${NVIDIA_NIM_API_KEY:-}
     volumes:
       - ./configs/litellm_config.yaml:/app/config.yaml:ro
+      - ./configs/litellm_guardrails.py:/app/litellm_guardrails.py:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     ports:
       - "127.0.0.1:4000:4000"
@@ -337,8 +338,31 @@ services:
   # committed .template - hermes setup's interactive wizard is bypassed
   # entirely for a reproducible, headless deployment) - NOT built by this
   # compose file (a real, large, third-party image: nousresearch/hermes-agent).
+  #
+  # Pinned to an exact image digest (Mohit's approval condition 2), not
+  # `:latest` - `:latest` is a mutable tag that can silently change
+  # underneath a `docker compose pull`/restart with no review. Digest
+  # captured 2026-09-29 via `docker inspect nousresearch/hermes-agent:latest
+  # --format '{{index .RepoDigests 0}}'` right after pulling it fresh.
+  #
+  # Upgrade procedure (manual, deliberate - no auto-updates):
+  #   1. Read https://github.com/NousResearch/hermes-agent/releases (or
+  #      the image's own changelog) for what changed - specifically check
+  #      whether the built-in toolset catalog changed (a new toolset name
+  #      not in this project's disabled_toolsets list would ship enabled
+  #      by default) and whether config.yaml's schema migrated again.
+  #   2. `docker pull nousresearch/hermes-agent:<new-tag>`, then
+  #      `docker inspect nousresearch/hermes-agent:<new-tag> --format
+  #      '{{index .RepoDigests 0}}'` for the new digest.
+  #   3. Update the digest below for BOTH hermes-researcher and
+  #      hermes-chief in a branch, run the full Milestone 2 acceptance
+  #      test suite (docs/evidence/milestone2_step6_acceptance_tests.md)
+  #      against it - especially test (a) (env/credential audit) and the
+  #      disabled_toolsets checks, since those are exactly what a version
+  #      bump could silently break.
+  #   4. Only merge/deploy the new digest once that full suite passes.
   hermes-researcher:
-    image: nousresearch/hermes-agent:latest
+    image: nousresearch/hermes-agent@sha256:d4da4a40cd7a28aba983775d9fd31d94cbf153eeb0cb9e844d6d0f612b7c24db
     restart: unless-stopped
     depends_on:
       gateway-mcp:
@@ -359,7 +383,7 @@ services:
       start_period: 60s
 
   hermes-chief:
-    image: nousresearch/hermes-agent:latest
+    image: nousresearch/hermes-agent@sha256:d4da4a40cd7a28aba983775d9fd31d94cbf153eeb0cb9e844d6d0f612b7c24db
     restart: unless-stopped
     depends_on:
       gateway-mcp:
