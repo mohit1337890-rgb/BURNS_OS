@@ -108,11 +108,18 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      NVIDIA_NIM_API_KEY: ${NVIDIA_NIM_API_KEY:-}
     volumes:
       - ./configs/litellm_config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     ports:
       - "127.0.0.1:4000:4000"
+    # Dual-homed (Milestone 2) - default for postgres/everything else it
+    # already needed, PLUS hermes_internal so the Hermes containers can
+    # reach it (and reach ONLY it and gateway-mcp - see the top-level
+    # networks: block).
+    networks: [default, hermes_internal]
     healthcheck:
       # No wget/curl in this image (verified 2026-09-28) - python3 (already
       # present, it's how litellm itself runs) via urllib instead.
@@ -263,6 +270,10 @@ services:
     volumes:
       - ledger_anchor_data:/data
     command: ["python", "-m", "gateway.mcp_server"]
+    # Dual-homed (Milestone 2) - default (needs Postgres for the Ledger),
+    # PLUS hermes_internal so the Hermes containers can reach this
+    # specifically (and nothing else on hermes_internal but litellm).
+    networks: [default, hermes_internal]
     healthcheck:
       test: ["CMD", "python", "-m", "gateway.healthcheck_mcp"]
       interval: 10s
@@ -310,6 +321,63 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # Milestone 2 (docs/MILESTONE_2_HERMES_DESIGN.md): the two Hermes
+  # containers. Config is pre-written (deploy/hermes/{researcher,chief}/
+  # config.yaml, rendered by scripts/generate_hermes_config.py from the
+  # committed .template - hermes setup's interactive wizard is bypassed
+  # entirely for a reproducible, headless deployment) - NOT built by this
+  # compose file (a real, large, third-party image: nousresearch/hermes-agent).
+  hermes-researcher:
+    image: nousresearch/hermes-agent:latest
+    restart: unless-stopped
+    depends_on:
+      gateway-mcp:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    volumes:
+      - ./deploy/hermes/researcher:/opt/data
+    command: ["hermes", "gateway", "run"]
+    # ONLY this network - no `default`, no internet, no route to Postgres/
+    # SMTP/anything else. No `ports:` either - not reachable from the host.
+    networks: [hermes_internal]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8642/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  hermes-chief:
+    image: nousresearch/hermes-agent:latest
+    restart: unless-stopped
+    depends_on:
+      gateway-mcp:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    volumes:
+      - ./deploy/hermes/chief:/opt/data
+    command: ["hermes", "gateway", "run"]
+    networks: [hermes_internal]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8642/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+networks:
+  default: {}
+  # Milestone 2 (docs/MILESTONE_2_HERMES_DESIGN.md section 2): the two
+  # Hermes containers join ONLY this network - `internal: true` means no
+  # default route, no internet access at all. litellm/gateway-mcp are
+  # dual-homed (default + this) so Hermes can reach exactly those two
+  # services and nothing else - not Postgres, not the internet, not SMTP.
+  hermes_internal:
+    driver: bridge
+    internal: true
 
 volumes:
   postgres_data:

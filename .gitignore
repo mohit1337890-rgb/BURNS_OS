@@ -9,3 +9,14 @@ backups/
 tests/e2e/.totp_secret_cache
 tests/e2e/evidence/
 .claude/
+# deploy/hermes/{researcher,chief}/ is bind-mounted as each container's
+# /opt/data - the running agent writes its ENTIRE runtime state there
+# (cache/, cron/, sessions/, skills/, memories/, SOUL.md, *.lock, *.sock,
+# *.db, config.yaml with the real bearer token, .env with the real
+# LiteLLM key, ...). Ignore all of it except the committed template -
+# found live 2026-09-29 when `git add` choked on a literal unix socket
+# file it can't index at all.
+deploy/hermes/researcher/*
+!deploy/hermes/researcher/config.yaml.template
+deploy/hermes/chief/*
+!deploy/hermes/chief/config.yaml.template

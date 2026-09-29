@@ -1,19 +1,23 @@
 # LiteLLM proxy config (BUILD PROMPT section 3: "Routes: premium
 # (coding/planning), cheap (summaries/classification), local via Ollama
-# (sensitive data)"). WRITTEN, NOT YET RUN - see docs/KNOWN_LIMITS.md.
-# Model names/pricing drift over time - re-verify against
-# https://docs.litellm.ai/docs/providers before the first real run.
+# (sensitive data)"). Model names/pricing drift over time - re-verify
+# against https://docs.litellm.ai/docs/providers before relying on this.
+#
+# 2026-09-29: switched to OpenRouter + NVIDIA NIM (the two providers Mohit
+# actually has keys for) instead of a direct Anthropic key, which was
+# never configured. See .env.example for OPENROUTER_API_KEY/
+# NVIDIA_NIM_API_KEY.
 
 model_list:
   - model_name: premium
     litellm_params:
-      model: anthropic/claude-opus-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openrouter/anthropic/claude-sonnet-4.5
+      api_key: os.environ/OPENROUTER_API_KEY
 
   - model_name: cheap
     litellm_params:
-      model: anthropic/claude-haiku-4-5
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: nvidia_nim/meta/llama-3.1-8b-instruct
+      api_key: os.environ/NVIDIA_NIM_API_KEY
 
   - model_name: local
     litellm_params:
