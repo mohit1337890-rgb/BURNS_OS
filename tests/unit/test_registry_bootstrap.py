@@ -59,6 +59,43 @@ def test_disabled_plugin_registers_a_refusing_stub_even_with_all_env_present(pol
     assert result.ok is False
 
 
+def test_web_fetch_registers_the_real_plugin(policy):
+    from gateway.plugins.web_research import WebFetchPlugin
+
+    readiness = registry_bootstrap.bootstrap(policy, env={})
+    assert readiness["web_fetch"].ready is True
+    assert isinstance(plugins.get("web_fetch"), WebFetchPlugin)
+
+
+def test_web_search_has_no_api_key_configured_and_registers_a_stub(policy):
+    readiness = registry_bootstrap.bootstrap(policy, env={})
+    assert readiness["web_search"].ready is False
+    stub = plugins.get("web_search")
+    assert isinstance(stub, NotYetImplementedPlugin)
+
+
+def test_submit_and_get_research_report_register_with_session_factory(policy):
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import StaticPool
+
+    from core import ledger
+    from gateway.plugins.web_research import GetResearchReportPlugin, SubmitResearchReportPlugin
+
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    ledger.init_db(engine)
+    factory = ledger.get_session_factory(engine)
+
+    readiness = registry_bootstrap.bootstrap(policy, env={}, session_factory=factory)
+    assert readiness["submit_research_report"].ready is True
+    assert readiness["get_research_report"].ready is True
+    submit_plugin = plugins.get("submit_research_report")
+    assert isinstance(submit_plugin, SubmitResearchReportPlugin)
+    assert isinstance(plugins.get("get_research_report"), GetResearchReportPlugin)
+
+    result = submit_plugin.execute({"query": "q", "report_text": "findings", "source_urls": []})
+    assert result.ok is True
+
+
 def test_every_policy_yaml_tier23_action_ends_up_registered(policy):
     # approve_mission_spec is deliberately excluded - see its note in
     # policy.yaml: it's never routed through gateway/plugins at all

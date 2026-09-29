@@ -115,6 +115,39 @@ def test_researcher_role_still_executes_tier0_actions(session, policy):
     assert outcome.status == "executed"
 
 
+def test_tier0_action_with_a_registered_plugin_actually_calls_it(session, policy):
+    """Milestone 2 (docs/MILESTONE_2_HERMES_DESIGN.md): unlike the
+    original Tier 0/1 behavior (log only, no plugin/credential involved),
+    an action that DOES have a real registered plugin (web_fetch,
+    submit_research_report, ...) must actually be executed, not just
+    rubber-stamped EXECUTED_IN_SANDBOX - proven here with a fake plugin
+    standing in for a real one."""
+    fake = _FakePlugin()
+    plugins.register("web_fetch", fake)
+    outcome = core_execute.request_action(
+        session, policy, agent_role="researcher", mission_id="m1",
+        action="web_fetch", params={"url": "https://example.com"}, input_summary="research",
+    )
+    assert outcome.status == "executed"
+    assert len(fake.calls) == 1
+    entry = session.get(ledger.LedgerEntry, outcome.ledger_entry_id)
+    assert entry.result != "EXECUTED_IN_SANDBOX"
+    assert "OK:" in entry.result
+
+
+def test_tier0_action_with_no_registered_plugin_still_just_logs(session, policy):
+    """Backward compatibility: an ordinary Tier 0/1 action with no
+    registered plugin (read_file, sql_read, ...) is completely unaffected
+    by Milestone 2 - still just a log entry, no plugin lookup failure."""
+    outcome = core_execute.request_action(
+        session, policy, agent_role="researcher", mission_id="m1",
+        action="read_file", params={}, input_summary="read a file",
+    )
+    assert outcome.status == "executed"
+    entry = session.get(ledger.LedgerEntry, outcome.ledger_entry_id)
+    assert entry.result == "EXECUTED_IN_SANDBOX"
+
+
 def test_hard_blocked_action_refuses_and_is_logged(session, policy):
     outcome = core_execute.request_action(
         session, policy, agent_role="anyone", mission_id="m1",

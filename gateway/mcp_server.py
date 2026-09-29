@@ -25,7 +25,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy.orm import sessionmaker
 
 from core import app_config, approvals, ledger, ledger_anchor, policy_engine
-from gateway import core_execute, mcp_auth
+from gateway import core_execute, mcp_auth, registry_bootstrap
 
 
 def build_server(session_factory: sessionmaker, policy: policy_engine.PolicyDocument, anchor_sinks: list | None = None) -> MCPServer:
@@ -163,6 +163,16 @@ def main() -> None:
     sinks = [ledger_anchor.FileAnchorSink(core_config.anchor_path)]
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
         sinks.append(ledger_anchor.TelegramAnchorSink())
+
+    # This process has its own separate gateway.plugins._REGISTRY (a fresh
+    # module-level dict - gateway-mcp is a different container/process
+    # from gateway, they never share in-memory state) - without this, the
+    # Tier 0/1 real plugins Milestone 2 needs (web_fetch,
+    # submit_research_report, get_research_report - see
+    # gateway/core_execute.py's Tier 0/1 branch) would never be registered
+    # here and would silently fall back to "EXECUTED_IN_SANDBOX" with no
+    # actual effect.
+    registry_bootstrap.bootstrap(policy, session_factory=session_factory)
 
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if transport == "streamable-http":

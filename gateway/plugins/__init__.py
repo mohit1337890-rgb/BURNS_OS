@@ -47,5 +47,17 @@ def get(action: str) -> Plugin:
     return plugin
 
 
+def get_optional(action: str) -> Plugin | None:
+    """Used by gateway.core_execute's Tier 0/1 path - unlike get(), this
+    does NOT fail closed for an unregistered action, because most Tier
+    0/1 actions (read_file, sql_read, ...) are things the agent runtime
+    executes on its own with no Gateway-side credential at all (the
+    Gateway's only job for those is to log them - see
+    gateway/core_execute.py's own module docstring). Only a Tier 0/1
+    action that DOES have a real, registered plugin (web_fetch,
+    submit_research_report, ...) gets that plugin actually invoked."""
+    return _REGISTRY.get(action)
+
+
 def registered_actions() -> list[str]:
     return sorted(_REGISTRY.keys())

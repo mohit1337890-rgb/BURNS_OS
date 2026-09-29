@@ -15,18 +15,15 @@ from __future__ import annotations
 
 import os
 
+from sqlalchemy.orm import sessionmaker
+
 from core import app_config, policy_engine
 from gateway.plugins import register
 from gateway.plugins.email_smtp import SmtpEmailPlugin
 from gateway.plugins.git_push import GitPushPlugin
 from gateway.plugins.stubs import NotYetImplementedPlugin
 from gateway.plugins.telegram import TelegramPlugin
-
-_REAL_PLUGIN_FACTORIES = {
-    "send_message": lambda policy: TelegramPlugin(),
-    "send_email": lambda policy: SmtpEmailPlugin(),
-    "git_push": lambda policy: GitPushPlugin(allowed_roots=policy.git_push_allowed_roots),
-}
+from gateway.plugins.web_research import GetResearchReportPlugin, SubmitResearchReportPlugin, WebFetchPlugin
 
 _UNIMPLEMENTED_TODOS = {
     "deploy_app": "Coolify integration not wired yet - needs a running Coolify instance.",
@@ -41,20 +38,38 @@ _UNIMPLEMENTED_TODOS = {
 }
 
 
-def bootstrap(policy: policy_engine.PolicyDocument, env: dict | None = None) -> dict[str, "app_config.PluginReadiness"]:
+def bootstrap(
+    policy: policy_engine.PolicyDocument, env: dict | None = None, session_factory: sessionmaker | None = None,
+) -> dict[str, "app_config.PluginReadiness"]:
     """Returns the readiness decision made for every plugin action named in
     policy.yaml's `plugins:` section, for callers (gateway/app.py's health
     endpoint) that want to report it rather than just silently act on it.
+
+    session_factory is only needed by the Milestone 2 research-report
+    plugins (they persist to core/research_reports.py) - None is fine for
+    any caller that never enables those (e.g. a test exercising only the
+    pre-Milestone-2 plugins), since _REAL_PLUGIN_FACTORIES's own closures
+    only ever call session_factory() lazily, at actual plugin-execute
+    time, not at registration time.
     """
     env = env if env is not None else os.environ
     readiness_report: dict[str, app_config.PluginReadiness] = {}
+
+    real_plugin_factories = {
+        "send_message": lambda policy: TelegramPlugin(),
+        "send_email": lambda policy: SmtpEmailPlugin(),
+        "git_push": lambda policy: GitPushPlugin(allowed_roots=policy.git_push_allowed_roots),
+        "web_fetch": lambda policy: WebFetchPlugin(allowed_domains=policy.actions["web_fetch"].allowed_domains),
+        "submit_research_report": lambda policy: SubmitResearchReportPlugin(session_factory),
+        "get_research_report": lambda policy: GetResearchReportPlugin(session_factory),
+    }
 
     for name, requirement in policy.plugins.items():
         readiness = app_config.check_plugin_ready(requirement, env=env)
         readiness_report[name] = readiness
 
-        if readiness.ready and name in _REAL_PLUGIN_FACTORIES:
-            register(name, _REAL_PLUGIN_FACTORIES[name](policy))
+        if readiness.ready and name in real_plugin_factories:
+            register(name, real_plugin_factories[name](policy))
         else:
             register(name, NotYetImplementedPlugin(name, readiness.reason))
 

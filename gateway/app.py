@@ -64,7 +64,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             sinks.append(ledger_anchor.TelegramAnchorSink())
         configure_anchor_sinks(sinks)
 
-        registry_bootstrap.bootstrap(policy)
+        registry_bootstrap.bootstrap(policy, session_factory=_session_factory)
     yield
 
 

@@ -35,7 +35,7 @@ from gateway import plugins
 
 @dataclass(frozen=True)
 class ActionOutcome:
-    status: str  # "executed" | "pending_approval" | "refused_hard_block" | "refused_budget" | "refused_role_not_allowed"
+    status: str  # "executed" | "execution_failed" | "pending_approval" | "refused_hard_block" | "refused_budget" | "refused_role_not_allowed"
     detail: str
     ledger_entry_id: Optional[int] = None
     approval_id: Optional[str] = None
@@ -98,16 +98,43 @@ def request_action(
         )
         return ActionOutcome(status="refused_budget", detail=str(exc), ledger_entry_id=entry.id)
 
-    # Step 3: Tier 0/1 - executes in-sandbox, Gateway just logs it.
+    # Step 3: Tier 0/1. Most of these (read_file, sql_read, ...) are things
+    # the agent runtime executes on its own with no Gateway-side credential
+    # at all - the Gateway's only job is to log them for audit completeness
+    # (the ORIGINAL design, still true for those). But since Milestone 2
+    # (docs/MILESTONE_2_HERMES_DESIGN.md), some Tier-0 actions (web_fetch,
+    # submit_research_report, get_research_report) DO need the Gateway to
+    # actually run something server-side (domain-policy enforcement, no
+    # client-side search-API credential, the researcher/chief-of-staff
+    # handoff store) - get_optional() returns a real plugin for exactly
+    # those and None for everything else, so this stays a no-op for every
+    # pre-Milestone-2 Tier 0/1 action.
     if verdict.tier in (0, 1):
+        plugin = plugins.get_optional(action)
+        if plugin is None:
+            entry = ledger.append_entry(
+                session,
+                ledger.LedgerEntryInput(
+                    mission_id=mission_id, agent_role=agent_role, action=action, tier=verdict.tier,
+                    input_summary=input_summary, tool=action, result="EXECUTED_IN_SANDBOX",
+                ),
+            )
+            return ActionOutcome(status="executed", detail="Tier 0/1 action executed in-sandbox.", ledger_entry_id=entry.id)
+
+        result = plugin.execute(params)
         entry = ledger.append_entry(
             session,
             ledger.LedgerEntryInput(
                 mission_id=mission_id, agent_role=agent_role, action=action, tier=verdict.tier,
-                input_summary=input_summary, tool=action, result="EXECUTED_IN_SANDBOX",
+                input_summary=input_summary, tool=action,
+                result=("OK: " + result.detail) if result.ok else ("FAILED: " + result.detail),
+                cost_usd=result.cost_usd, evidence_links=result.evidence_links or [],
             ),
         )
-        return ActionOutcome(status="executed", detail="Tier 0/1 action executed in-sandbox.", ledger_entry_id=entry.id)
+        return ActionOutcome(
+            status="executed" if result.ok else "execution_failed",
+            detail=result.detail, ledger_entry_id=entry.id,
+        )
 
     # Step 4: Tier 2/3 - create an approval request, do NOT execute yet.
     req = approvals.create_approval(

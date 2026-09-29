@@ -33,8 +33,26 @@ actions:
     tier: 0
   web_search:
     tier: 0
+    notes: "No search-API key configured yet (EXA_API_KEY/TAVILY_API_KEY) - stubbed via NotYetImplementedPlugin, same as deploy_app/place_trade. See gateway/registry_bootstrap.py."
   web_fetch:
     tier: 0
+    # Fail-closed allow-list (Milestone 2, docs/MILESTONE_2_HERMES_DESIGN.md
+    # section 3) - a domain not on this list is refused, not silently
+    # fetched. Extend deliberately, same reasoning as git_push_allowed_roots.
+    allowed_domains:
+      - reuters.com
+      - bloomberg.com
+      - investing.com
+      - forexfactory.com
+      - arxiv.org
+      - github.com
+      - wikipedia.org
+  submit_research_report:
+    tier: 0
+    notes: "The researcher -> chief-of-staff handoff (Milestone 2 condition 4) - stores an already-UNTRUSTED-wrapped report via core/research_reports.py. See gateway/plugins/web_research.py."
+  get_research_report:
+    tier: 0
+    notes: "Retrieves a report stored by submit_research_report - returns it exactly as stored (already UNTRUSTED-wrapped), never re-wrapped or unwrapped."
   sql_read:
     tier: 0
   repo_read:
@@ -168,6 +186,19 @@ plugins:
   place_trade:
     enabled: false
     required_env: [MT5_LOGIN, MT5_PASSWORD, MT5_SERVER]
+  # --- Milestone 2 (docs/MILESTONE_2_HERMES_DESIGN.md) ---------------------
+  web_fetch:
+    enabled: true
+    required_env: []
+  web_search:
+    enabled: false  # no search-API key configured yet - see the action's own notes above
+    required_env: [EXA_API_KEY]
+  submit_research_report:
+    enabled: true
+    required_env: []
+  get_research_report:
+    enabled: true
+    required_env: []
 
 # Real directory roots git_push is allowed to push from - a repo_path must
 # RESOLVE (symlinks/..-traversal followed) to somewhere inside one of
@@ -196,6 +227,9 @@ roles:
   chief_of_staff:
     # Can request up to Tier 3 (the human approval/cooling-period gate is
     # unchanged) but must never read raw web content directly - it only
-    # ever sees the researcher's summary via submit_research_report.
+    # ever sees the researcher's summary via get_research_report. Also
+    # never submits its own "research report" (that's the researcher's
+    # job) - listed for defense in depth, not because chief_of_staff would
+    # otherwise have a real use for it.
     max_tier: 3
-    forbidden_actions: [web_search, web_fetch]
+    forbidden_actions: [web_search, web_fetch, submit_research_report]

@@ -41,6 +41,7 @@ from core import approvals, ledger, missions  # noqa: F401 - approvals/missions 
 # missions-touching test with "relation approvals does not exist" because
 # only the ledger table existed in burns_os_test.
 import dashboard.models  # noqa: F401 - same reasoning, for owner_account/dashboard_session/command_request
+import core.research_reports  # noqa: F401 - same reasoning, for research_report (Milestone 2)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
