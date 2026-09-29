@@ -12,6 +12,39 @@ See `docs/incidents/2026-09-litellm-table-drop.md` for the one real
 incident this live testing caused (litellm briefly shared, and its
 schema-sync dropped, Burns OS's own tables) and how it was closed.
 
+## Running `docker`/`make` commands on this machine (Windows)
+
+If a fresh PowerShell window says `docker` (or `docker compose`, `make`)
+is "not recognized", this is a known, verified quirk on this specific
+machine, not a sign Docker is missing - **confirmed 2026-09-29**: Docker
+Desktop's installer did correctly add
+`C:\Program Files\Docker\Docker\resources\bin` to the persisted, system-
+level `Path` (`[Environment]::GetEnvironmentVariable("Path","Machine")`),
+but Windows Explorer hasn't re-read that change (it only does so at
+logon or an explicit broadcast), so every new terminal window it spawns
+still inherits the stale environment until you sign out/in (or restart
+`explorer.exe`). Three ways to work around it, in order of convenience:
+
+1. **One command, works immediately, any window, no setup**: call
+   `docker.exe` by its full path:
+   ```powershell
+   & "C:\Program Files\Docker\Docker\resources\bin\docker.exe" <args>
+   ```
+2. **Fixes the rest of THIS PowerShell session** (paste once per new
+   window, then use `docker`/`docker compose` normally for that window):
+   ```powershell
+   $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+   ```
+3. **Permanent fix**: sign out and back in (or restart `explorer.exe`
+   from Task Manager) once - every new PowerShell window after that picks
+   up the already-correct system `Path` on its own, no further workaround
+   needed.
+
+(This repo's own `Makefile`/docs assume a shell where `docker`/`make`
+already resolve - Git Bash sessions in this environment work the same
+way, just fixed the same way per-session with
+`export PATH="$PATH:/c/Program Files/Docker/Docker/resources/bin"`.)
+
 ## What's real right now (Milestone 1, in progress)
 
 **Telegram is postponed (2026-09-29); the Web Dashboard is now the primary

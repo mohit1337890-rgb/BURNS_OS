@@ -112,12 +112,19 @@ does **not** touch TOTP - password and TOTP are independent secrets, so
 this never requires re-enrolling 2FA.
 
 ```powershell
-docker exec -it burns_os_system-dashboard-1 python -m scripts.admin_change_owner_password
+& "C:\Program Files\Docker\Docker\resources\bin\docker.exe" exec -it burns_os_system-dashboard-1 python -m scripts.admin_change_owner_password
 ```
 
-(`-it` matters - this prompts interactively via `getpass`, never accepts
+(Paste that exactly into a fresh PowerShell window - if a plain `docker`
+command normally works for you already, `docker exec -it ...` is the same
+thing without the full path. See the README's "Running docker/make
+commands on this machine" section if you get a "docker is not
+recognized" error - it's a known, already-diagnosed PATH quirk on this
+machine, not a sign anything is broken.)
+
+`-it` matters - this prompts interactively via `getpass`, never accepts
 the password as a command-line argument, so it never ends up in shell
-history.) Log in again afterward with the new password and your existing
+history. Log in again afterward with the new password and your existing
 authenticator app code.
 
 ## Resetting the owner account (dev/test only)
