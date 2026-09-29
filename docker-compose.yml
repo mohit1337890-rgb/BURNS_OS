@@ -312,8 +312,17 @@ services:
       # docs/DASHBOARD.md). Only ever needs to be false if something other
       # than a loopback address sits in front of this without TLS.
       DASHBOARD_COOKIE_SECURE: ${DASHBOARD_COOKIE_SECURE:-true}
+      # Milestone 2: Command box -> hermes-chief (fire-and-forget). Unset
+      # in .env means the Command box degrades to log-only, gracefully -
+      # see dashboard/app.py's own comment on this.
+      HERMES_CHIEF_API_SERVER_KEY: ${HERMES_CHIEF_API_SERVER_KEY:-}
     volumes:
       - ledger_anchor_data:/data
+    # Dual-homed (Milestone 2) - default for postgres/gateway (already
+    # needed), PLUS hermes_internal so this can reach hermes-chief's
+    # api-server specifically (and nothing else on that network but
+    # litellm/gateway-mcp, which this doesn't need and never calls).
+    networks: [default, hermes_internal]
     ports:
       - "127.0.0.1:8090:8090"
     healthcheck:

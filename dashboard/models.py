@@ -7,7 +7,7 @@ why this is a separate concern from core/ledger.py's append-only rows.
 
 from __future__ import annotations
 
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from core.ledger import Base
 
@@ -43,3 +43,13 @@ class CommandRequest(Base):
     text = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
     ledger_entry_id = Column(Integer, nullable=True)
+    # Milestone 2 (docs/MILESTONE_2_HERMES_DESIGN.md) - fire-and-forget
+    # dispatch to hermes-chief's api-server. "dispatched" -> "completed" |
+    # "failed" | "unknown" (the last one mirrors core/reconciliation.py's
+    # UNKNOWN_OUTCOME pattern for a hermes-chief crash mid-command -
+    # KNOWN_LIMITS bug #11's same reasoning: a process can always die
+    # mid-task). Nullable/default "logged_only" preserves every
+    # pre-Milestone-2 row (before this column existed, nothing was ever
+    # dispatched to anything).
+    status = Column(String, nullable=False, default="logged_only")
+    result_text = Column(Text, nullable=True)

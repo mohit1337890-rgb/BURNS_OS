@@ -280,7 +280,9 @@ def test_double_approve_via_dashboard_executes_once(client, db_session):
 
 # --- command box --------------------------------------------------------------------
 
-def test_command_box_logs_but_does_not_execute(client, db_session):
+def test_command_box_logs_but_does_not_execute_when_hermes_not_configured(client, db_session, monkeypatch):
+    monkeypatch.delenv("HERMES_CHIEF_API_SERVER_KEY", raising=False)
+    monkeypatch.setattr(dashboard_app, "_HERMES_CHIEF_API_SERVER_KEY", "")
     _bootstrap_and_login(client, db_session)
     csrf = _get_csrf(client)
     resp = client.post("/command", data={"text": "deploy the app to production", "csrf_token": csrf})
@@ -290,3 +292,62 @@ def test_command_box_logs_but_does_not_execute(client, db_session):
     rows = db_session.query(CommandRequest).all()
     assert len(rows) == 1
     assert rows[0].text == "deploy the app to production"
+    assert rows[0].status == "logged_only"
+
+
+def test_command_box_dispatches_to_hermes_chief_when_configured(client, db_session, monkeypatch):
+    """Milestone 2: with HERMES_CHIEF_API_SERVER_KEY set, the Command box
+    actually calls hermes-chief's api-server (fire-and-forget - a
+    BackgroundTask, which Starlette's TestClient runs synchronously
+    before returning, convenient for testing) and records the result."""
+    monkeypatch.setattr(dashboard_app, "_HERMES_CHIEF_API_SERVER_KEY", "fake-api-server-key")
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Researched XAUUSD - gold rose 2% this week."}}]}
+
+    calls = []
+
+    def _fake_post(url, timeout=None, headers=None, json=None):
+        calls.append({"url": url, "headers": headers, "json": json})
+        return _FakeResponse()
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    _bootstrap_and_login(client, db_session)
+    csrf = _get_csrf(client)
+    resp = client.post("/command", data={"text": "research XAUUSD news this week", "csrf_token": csrf})
+    assert resp.status_code == 200
+    assert "dispatched" in resp.text.lower()
+
+    assert len(calls) == 1
+    assert calls[0]["headers"]["Authorization"] == "Bearer fake-api-server-key"
+    assert calls[0]["json"]["messages"][0]["content"] == "research XAUUSD news this week"
+
+    from dashboard.models import CommandRequest
+    row = db_session.query(CommandRequest).one()
+    assert row.status == "completed"
+    assert "gold rose 2%" in row.result_text
+
+
+def test_command_box_records_failure_when_hermes_chief_unreachable(client, db_session, monkeypatch):
+    monkeypatch.setattr(dashboard_app, "_HERMES_CHIEF_API_SERVER_KEY", "fake-api-server-key")
+
+    def _fake_post(*args, **kwargs):
+        raise ConnectionError("connection refused")
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    _bootstrap_and_login(client, db_session)
+    csrf = _get_csrf(client)
+    client.post("/command", data={"text": "do something", "csrf_token": csrf})
+
+    from dashboard.models import CommandRequest
+    row = db_session.query(CommandRequest).one()
+    assert row.status == "failed"
+    assert "connection refused" in row.result_text.lower()

@@ -38,7 +38,7 @@ from typing import AsyncGenerator, Generator, Optional
 
 import pyotp
 import qrcode
-from fastapi import Cookie, Depends, FastAPI, Form, Request
+from fastapi import BackgroundTasks, Cookie, Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, sessionmaker
@@ -362,7 +362,68 @@ def budgets_page(request: Request, session_token: str | None = Cookie(default=No
     return templates.TemplateResponse(request, "budgets.html", {"monthly": monthly, "mission_budgets": mission_budgets})
 
 
-# --- command box (does NOT execute - Milestone 2 not yet approved) --------------------
+# --- command box (Milestone 2: dispatches to hermes-chief, fire-and-forget) -----------
+
+# HERMES_CHIEF_API_SERVER_KEY unset (e.g. every dashboard unit test, or a
+# deployment that hasn't stood up Hermes yet) means "not configured" -
+# falls back to the pre-Milestone-2 log-only behavior instead of trying
+# and failing every command. This is a deliberate degrade, not a bug:
+# Milestone 2 being approved doesn't mean every environment running this
+# code has hermes-chief actually running.
+_HERMES_CHIEF_API_URL = os.environ.get("HERMES_CHIEF_API_URL", "http://hermes-chief:8642/v1/chat/completions")
+_HERMES_CHIEF_API_SERVER_KEY = os.environ.get("HERMES_CHIEF_API_SERVER_KEY", "")
+_HERMES_DISPATCH_TIMEOUT_SECONDS = 120.0
+
+
+def _dispatch_to_hermes_chief(command_request_id: str, text: str) -> None:
+    """Runs as a FastAPI BackgroundTask (after the HTTP response is
+    already sent - fire-and-forget per docs/MILESTONE_2_HERMES_DESIGN.md
+    decision 6.3, since a real agent reasoning loop can take far longer
+    than an HTTP request should reasonably block for). Needs its own DB
+    session - the request-scoped one from Depends(get_session) is already
+    closed by the time this runs.
+
+    If hermes-chief crashes or this process is killed mid-dispatch, this
+    row is left "dispatched" forever with no update - the same class of
+    problem core/reconciliation.py's EXECUTING-marker pattern exists for.
+    Not yet closed here (see docs/evidence for this step) - a genuine gap,
+    not an oversight: needs its own reconciliation pass, tracked as
+    follow-up work, same as KNOWN_LIMITS bug #11 was before it was fixed.
+    """
+    import httpx
+
+    session = _session_factory()
+    try:
+        cmd = session.get(CommandRequest, command_request_id)
+        if cmd is None:
+            return
+        try:
+            resp = httpx.post(
+                _HERMES_CHIEF_API_URL, timeout=_HERMES_DISPATCH_TIMEOUT_SECONDS,
+                headers={"Authorization": f"Bearer {_HERMES_CHIEF_API_SERVER_KEY}"},
+                json={"model": "hermes-agent", "messages": [{"role": "user", "content": text}]},
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            output_text = body["choices"][0]["message"]["content"]
+            cmd.status = "completed"
+            cmd.result_text = output_text
+        except Exception as exc:  # noqa: BLE001 - any failure must still be recorded, never silently lost
+            cmd.status = "failed"
+            cmd.result_text = f"Dispatch to hermes-chief failed: {exc}"
+        session.commit()
+
+        ledger.append_entry(
+            session,
+            ledger.LedgerEntryInput(
+                mission_id=None, agent_role="owner", action="dashboard_command_result", tier=0,
+                input_summary=text[:200], tool="hermes-chief",
+                result=f"{cmd.status.upper()}: {(cmd.result_text or '')[:500]}",
+            ),
+        )
+    finally:
+        session.close()
+
 
 @app.get("/command", response_class=HTMLResponse)
 def command_get(request: Request, session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME), session: Session = Depends(get_session)):
@@ -374,7 +435,10 @@ def command_get(request: Request, session_token: str | None = Cookie(default=Non
 
 
 @app.post("/command", response_class=HTMLResponse)
-def command_post(request: Request, text: str = Form(...), csrf_token: str = Form(...), session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME), session: Session = Depends(get_session)):
+def command_post(
+    request: Request, background_tasks: BackgroundTasks, text: str = Form(...), csrf_token: str = Form(...),
+    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME), session: Session = Depends(get_session),
+):
     dash_session = _require_session(session, session_token)
     if dash_session is None:
         return RedirectResponse("/login", status_code=303)
@@ -383,18 +447,29 @@ def command_post(request: Request, text: str = Form(...), csrf_token: str = Form
         return templates.TemplateResponse(request, "command.html", {"csrf_token": dash_session.csrf_secret, "recent": recent, "message": "CSRF check failed."}, status_code=403)
 
     now = datetime.now(timezone.utc)
+    dispatching = bool(_HERMES_CHIEF_API_SERVER_KEY)
+    status = "dispatched" if dispatching else "logged_only"
+    result = (
+        f"DISPATCHED to hermes-chief. Text: {text[:500]!r}" if dispatching
+        else f"LOGGED: not executed - hermes-chief is not configured on this deployment (HERMES_CHIEF_API_SERVER_KEY unset). Text: {text[:500]!r}"
+    )
     entry = ledger.append_entry(
         session,
         ledger.LedgerEntryInput(
             mission_id=None, agent_role="owner", action="dashboard_command", tier=1,
-            input_summary=text[:200], tool="dashboard",
-            result=f"LOGGED: not executed - Milestone 2 (Hermes) is not yet approved. Text: {text[:500]!r}",
+            input_summary=text[:200], tool="dashboard", result=result,
         ),
         ts=now,
     )
-    cmd = CommandRequest(id=str(uuid.uuid4()), text=text, created_at=now, ledger_entry_id=entry.id)
+    cmd = CommandRequest(id=str(uuid.uuid4()), text=text, created_at=now, ledger_entry_id=entry.id, status=status)
     session.add(cmd)
     session.commit()
 
+    if dispatching:
+        background_tasks.add_task(_dispatch_to_hermes_chief, cmd.id, text)
+        message = "Dispatched to hermes-chief - refresh this page for the result."
+    else:
+        message = "Logged (not executed) - hermes-chief is not configured on this deployment."
+
     recent = session.query(CommandRequest).order_by(CommandRequest.created_at.desc()).limit(20).all()
-    return templates.TemplateResponse(request, "command.html", {"csrf_token": dash_session.csrf_secret, "recent": recent, "message": "Logged (not executed) - see the Ledger."})
+    return templates.TemplateResponse(request, "command.html", {"csrf_token": dash_session.csrf_secret, "recent": recent, "message": message})

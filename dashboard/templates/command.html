@@ -2,13 +2,13 @@
 {% block title %}Command - Burns OS{% endblock %}
 {% block content %}
 <h2>Command box</h2>
-<p class="muted">Until Milestone 2 (Hermes) is approved, this only creates a LOGGED request in the Ledger - it does not execute anything.</p>
+<p class="muted">Dispatches to hermes-chief (fire-and-forget) - refresh this page for the result. Every Tier-2/3 effect it requests still goes through the normal Approvals flow, with a fresh TOTP code required for Tier 3.</p>
 {% if message %}<div class="msg">{{ message }}</div>{% endif %}
 
 <form method="post" action="/command">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <textarea name="text" rows="3" placeholder="What would you like Burns OS to do?" required></textarea>
-  <button type="submit">Log request (does not execute)</button>
+  <button type="submit">Send to hermes-chief</button>
 </form>
 
 <h3>Recent requests</h3>
@@ -18,7 +18,8 @@
 {% for c in recent %}
   <div class="card">
     <p>{{ c.text }}</p>
-    <p class="muted">{{ c.created_at }} &middot; ledger entry #{{ c.ledger_entry_id }}</p>
+    <p class="muted">{{ c.created_at }} &middot; ledger entry #{{ c.ledger_entry_id }} &middot; status: <strong>{{ c.status }}</strong></p>
+    {% if c.result_text %}<p class="result">{{ c.result_text }}</p>{% endif %}
   </div>
 {% endfor %}
 {% endif %}

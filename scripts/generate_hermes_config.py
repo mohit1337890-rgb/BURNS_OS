@@ -41,6 +41,32 @@ def main() -> int:
             text = text.replace(placeholder, value)
         out_path.write_text(text, encoding="utf-8")
         print(f"wrote {out_path}")
+
+    # Each profile's own .env (LITELLM_VIRTUAL_KEY_* referenced by
+    # config.yaml's key_env:, API_SERVER_* for the Dashboard -> hermes-chief
+    # Command box call) - the main .env is the single source of truth for
+    # all of these; this only ever copies, never generates independently
+    # (a prior version of this script generated API_SERVER_KEY fresh, in
+    # isolation, which the Dashboard could then never have authenticated
+    # with - fixed 2026-09-29).
+    env_vars = {
+        "researcher": {
+            "LITELLM_VIRTUAL_KEY_RESEARCHER": _env_value("LITELLM_VIRTUAL_KEY_RESEARCHER"),
+            "API_SERVER_ENABLED": "true",
+            "API_SERVER_HOST": "0.0.0.0",
+            "API_SERVER_KEY": _env_value("HERMES_RESEARCHER_API_SERVER_KEY"),
+        },
+        "chief": {
+            "LITELLM_VIRTUAL_KEY_CHIEF": _env_value("LITELLM_VIRTUAL_KEY_CHIEF"),
+            "API_SERVER_ENABLED": "true",
+            "API_SERVER_HOST": "0.0.0.0",
+            "API_SERVER_KEY": _env_value("HERMES_CHIEF_API_SERVER_KEY"),
+        },
+    }
+    for profile, values in env_vars.items():
+        out_path = REPO_ROOT / "deploy" / "hermes" / profile / ".env"
+        out_path.write_text("".join(f"{k}={v}\n" for k, v in values.items()), encoding="utf-8")
+        print(f"wrote {out_path}")
     return 0
 
 
