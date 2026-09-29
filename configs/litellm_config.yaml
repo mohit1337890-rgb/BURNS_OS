@@ -7,11 +7,20 @@
 # actually has keys for) instead of a direct Anthropic key, which was
 # never configured. See .env.example for OPENROUTER_API_KEY/
 # NVIDIA_NIM_API_KEY.
+#
+# Both routes deliberately point at genuinely $0 models (Mohit's explicit
+# request, to avoid surprise billing during Milestone 2 testing) -
+# premium's model ID confirmed live against OpenRouter's own
+# /api/v1/models endpoint (pricing.prompt == "0"), not assumed from a
+# blog post - free-model rosters shift constantly, re-verify the same
+# way before trusting an older note. cheap's NVIDIA NIM model is on
+# NVIDIA's own free developer tier (build.nvidia.com), not billed
+# per-token for moderate individual use.
 
 model_list:
   - model_name: premium
     litellm_params:
-      model: openrouter/anthropic/claude-sonnet-4.5
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
       api_key: os.environ/OPENROUTER_API_KEY
 
   - model_name: cheap

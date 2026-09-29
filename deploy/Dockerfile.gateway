@@ -8,6 +8,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY core/ ./core/
 COPY gateway/ ./gateway/
 COPY policies/ ./policies/
+# scripts/scheduler_loop.py needs dashboard.reconciliation (the scheduler
+# is this whole system's shared periodic-jobs runner, already doing the
+# equivalent for core.reconciliation - not a layering violation, the same
+# cross-package copying dashboard/'s own Dockerfile already does in
+# reverse for core/+gateway/).
+COPY dashboard/ ./dashboard/
 COPY alembic.ini .
 COPY pytest.ini .
 COPY db/ ./db/

@@ -22,6 +22,7 @@ import os
 import time
 
 from core import app_config, ledger, ledger_anchor, policy_engine, reconciliation, scheduler
+from dashboard import reconciliation as command_reconciliation
 from gateway import registry_bootstrap
 
 
@@ -72,6 +73,17 @@ def main() -> None:
             reconciled = reconciliation.run_reconciliation_pass(session, older_than_minutes=reconciliation_stale_minutes)
             if reconciled:
                 print(f"[SCHEDULER_LOOP] reconciled {len(reconciled)} stale EXECUTING marker(s) -> UNKNOWN_OUTCOME: {[e.approval_id for e in reconciled]}", flush=True)
+        finally:
+            session.close()
+
+        # Milestone 2: same reasoning, for CommandRequest rows stuck
+        # "dispatched" (dashboard/reconciliation.py) - hermes-chief or the
+        # dispatching process can die mid-task same as any plugin call can.
+        session = session_factory()
+        try:
+            reconciled_commands = command_reconciliation.run_command_reconciliation_pass(session, older_than_minutes=reconciliation_stale_minutes)
+            if reconciled_commands:
+                print(f"[SCHEDULER_LOOP] reconciled {len(reconciled_commands)} stale dispatched command(s) -> UNKNOWN_OUTCOME: {[c.id for c in reconciled_commands]}", flush=True)
         finally:
             session.close()
 

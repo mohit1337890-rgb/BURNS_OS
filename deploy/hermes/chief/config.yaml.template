@@ -33,7 +33,11 @@ agent:
 model:
   provider: custom
   base_url: http://litellm:4000/v1
-  default: cheap
+  # chief_of_staff gets the stronger route (better judgment for
+  # coordinating/deciding Tier-2/3 requests) - both routes are $0 models
+  # now (configs/litellm_config.yaml), so this is a capability choice, not
+  # a cost one.
+  default: premium
   key_env: LITELLM_VIRTUAL_KEY_CHIEF
 
 mcp_servers:
